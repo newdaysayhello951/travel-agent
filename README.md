@@ -20,3 +20,16 @@
 - 没有 SSE、并行 Agent 或人工审批恢复功能。上游文件中的此类说明不代表已实现。
 
 当前工作目录保留 Git 历史、协作约定和历史修改记录；原代码不参与运行。
+
+## 阅读目录
+
+- `python-impl/agents/`：路由、知识问答、工单与合规审查。
+- `python-impl/api/`：网页及 HTTP 接口。
+- `python-impl/memory/`：工作记忆、会话记录和知识检索。
+- `python-impl/tool_server/`：演示工具服务。
+- `python-impl/tracing/`：步骤追踪。
+- `python-impl/settings.py`：读取根目录 `.env` 并创建模型。
+- `python-impl/web/`：聊天页面。
+- `run.py`：启动入口。
+
+环境配置统一参考根目录 `.env.example`。`.venv` 是本机运行环境，`.work` 保存当前服务日志与验证结果，均无需阅读或提交。
