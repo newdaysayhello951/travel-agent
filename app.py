@@ -331,6 +331,8 @@ if st.session_state.get('conversation_id') and st.session_state.plan_data:
     version=st.session_state.plan_version
     st.caption(f'会话 {cid[:8]} · 当前查看版本 v{version}')
     current=get_store().get_plan(cid,version)
+    if current.plan.get('preference_checks',{}).get('constraints',{}).get('avoid_spicy'):
+        st.caption('已保留“不吃辣”要求；如需取消，可写“取消不吃辣限制”。实际菜品和加工方式仍须向商家确认。')
     with st.form('revise_plan'):
         instruction=st.text_area('继续修改行程',placeholder='例如：第二天减少一个景点，安排得轻松一些')
         preserve_hotels=st.checkbox('保留已有酒店及报价',value=True)

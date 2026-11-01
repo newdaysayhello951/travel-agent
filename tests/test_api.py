@@ -59,3 +59,15 @@ class ApiTests(unittest.TestCase):
     def test_login_throttling(self):
         for i in range(11):r=self.client.post('/auth/login',json={'username':'nobody','password':'invalid-password'})
         self.assertEqual(r.status_code,429)
+
+    def test_upstream_quota_is_safe_429(self):
+        from reliability import PlanningServiceError
+        async def limited(*args,**kwargs):
+            error=RuntimeError('private-provider-body');error.status_code=429
+            try:raise error
+            except RuntimeError:raise PlanningServiceError('safe') from None
+        with TestClient(create_app(self.store,lambda:SimpleNamespace(invoke=limited))) as client:
+            r=client.post('/plans',headers=self.headers['alice'],json={'query':'fixture','request':{'city':'长沙','start_date':'2026-11-10','end_date':'2026-11-10'}})
+        self.assertEqual(r.status_code,429)
+        self.assertEqual(r.json()['code'],'upstream_quota_limited')
+        self.assertNotIn('private-provider-body',r.text)

@@ -92,7 +92,11 @@ def create_app(store=None,planner_factory=None):
     @app.exception_handler(ExecutionLimitError)
     async def budget(request,exc):return JSONResponse(status_code=429,content={'detail':'本次规划达到执行预算上限'})
     @app.exception_handler(PlanningServiceError)
-    async def upstream(request,exc):return JSONResponse(status_code=503,content={'detail':'上游服务暂不可用'})
+    async def upstream(request,exc):
+        from quota import is_quota_error
+        if is_quota_error(exc):
+            return JSONResponse(status_code=429,content={'detail':'上游额度或频率受限，请等待恢复','code':'upstream_quota_limited'},headers={'Retry-After':'60'})
+        return JSONResponse(status_code=503,content={'detail':'上游服务暂不可用'})
     @app.exception_handler(Exception)
     async def unexpected(request,exc):return JSONResponse(status_code=500,content={'detail':'服务处理失败，请检查服务端记录'})
 

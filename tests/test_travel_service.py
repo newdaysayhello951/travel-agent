@@ -89,6 +89,17 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.response['overall_suggestions']+=' [K012345abcdef_0_012345ab]'
         with self.assertRaises(PlanValidationError):await self.service.create('fixture',self.request)
 
+    async def test_spice_constraint_survives_revision_and_rejects_conflict(self):
+        first=await self.service.create('长沙，不吃辣',self.request)
+        second=await self.service.revise(first.conversation_id,'只增加建议')
+        self.assertTrue(second.plan['preference_checks']['constraints']['avoid_spicy'])
+        self.response['days'][0]['meals'][1]['name']='火锅（微辣或鸳鸯锅）'
+        with self.assertRaises(PlanValidationError):await self.service.revise(first.conversation_id,'调整建议')
+        self.assertEqual(self.store.get_plan(first.conversation_id).version,2)
+        third=await self.service.revise(first.conversation_id,'取消不吃辣限制')
+        self.assertEqual(third.version,3)
+        self.assertFalse(third.plan['preference_checks']['constraints']['avoid_spicy'])
+
 
 class ConstrainedRepairTests(unittest.TestCase):
     def test_only_explicit_excess_attractions_can_be_removed(self):
