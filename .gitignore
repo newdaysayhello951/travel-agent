@@ -1,5 +1,7 @@
 # ---- 密钥 ----
 .env
+vector_store/
+*.log
 
 # ---- Python ----
 __pycache__/

@@ -1,8 +1,0 @@
-{
-  "title": "故宫参观规则摘要（2026年11月1日查阅）",
-  "city": "北京",
-  "source_url": "https://www.dpm.org.cn/Visit.html",
-  "content": "故宫博物院常规淡季为11月到次年3月：08:30开馆，15:30停止入馆，16:30闭馆。通常周一闭馆，法定节假日及临时安排需查看公告。成人大门票40元，优惠人群及额外展馆另按官方规则。需要预约，出发前由用户确认预约凭证及最新公告，不能把模型生成计划当成预约成功。",
-  "expires_on": "2026-11-08",
-  "facts": [{"name":"故宫博物院","aliases":["故宫"],"valid_from":"2026-11-01","valid_until":"2027-03-31","opens":"08:30","last_entry":"15:30","closes":"16:30","closed_weekdays":[0],"adult_ticket_price":40,"reservation_required":true}]
-}
