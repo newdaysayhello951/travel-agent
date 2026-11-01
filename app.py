@@ -1,5 +1,7 @@
 """智能旅行助手 — Streamlit Web 界面。"""
 import asyncio
+import json
+from dataclasses import asdict
 from datetime import date
 
 import streamlit as st
@@ -49,6 +51,27 @@ def get_planner():
     from agents.planner import TripPlanner
     llm = CONFIG.create_llm()
     return TripPlanner(llm)
+
+
+@st.cache_resource
+def get_store():
+    from config import CONFIG  # 先加载.env，包含可选DATABASE_URL
+    from storage import PlanStore
+    return PlanStore()
+
+
+def get_service():
+    from travel_service import TravelService
+    return TravelService(get_planner(),get_store())
+
+
+def load_saved(saved):
+    st.session_state.plan_data=saved.plan
+    st.session_state.plan_raw=json.dumps(saved.plan,ensure_ascii=False)
+    st.session_state.conversation_id=saved.conversation_id
+    st.session_state.plan_version=saved.version
+    st.session_state.run_report=None
+    st.session_state.status_lines=[]
 
 
 # ---- 辅助: 构建 prompt ----
@@ -156,6 +179,8 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    budget_limit=st.number_input('总预算上限（元，0表示不限）',min_value=0,step=100)
+    stay_on_last_day=st.checkbox('返程当天仍需住宿',value=False)
     submit_btn = st.button("🚀 开始规划", type="primary", use_container_width=True)
 
 
@@ -164,6 +189,22 @@ if "plan_data" not in st.session_state:
     st.session_state.plan_data = None
 if "plan_raw" not in st.session_state:
     st.session_state.plan_raw = ""
+
+with st.sidebar:
+    st.markdown('### 已保存行程')
+    conversations=get_store().list_conversations()
+    labels={c['id']:f"{c['title']} · v{c['version']} · {c['id'][:6]}" for c in conversations}
+    selected=st.selectbox('选择会话',['']+list(labels),format_func=lambda cid:labels.get(cid,'请选择'))
+    if selected:
+        history=get_store().history(selected)
+        if history['versions']:
+            selected_version=st.selectbox('查看版本',list(reversed(history['versions'])))
+            if st.button('加载此版本'):
+                load_saved(get_store().get_plan(selected,selected_version))
+                st.rerun()
+        else:
+            st.caption('尚无合格行程；可查看失败记录后重新规划。')
+            with st.expander('失败执行记录'):st.json(history['runs'])
 
 # 未开始时的引导页
 if not submit_btn and st.session_state.plan_data is None:
@@ -186,14 +227,13 @@ if submit_btn:
     elif end_date < start_date:
         st.error("结束日期不能早于开始日期")
     else:
-        planner = get_planner()
         from schemas import TripRequest, PlanValidationError
         from reliability import ExecutionLimitError, RunReport, PlanningServiceError
-        from dataclasses import asdict
         if (end_date - start_date).days > 30:
             st.error("单次最多规划31天，请缩短日期范围。")
             st.stop()
-        request = TripRequest(city=city.strip(), start_date=start_date, end_date=end_date)
+        request = TripRequest(city=city.strip(), start_date=start_date, end_date=end_date,
+                              budget_limit=budget_limit or None,stay_on_last_day=stay_on_last_day)
         prompt = build_prompt(
             city, start_date, end_date,
             transport_selected, hotel_type, pref_selected, extra_requirements,
@@ -201,57 +241,53 @@ if submit_btn:
 
         # 流式输出区域
         with st.spinner("🤖 AI 正在为您规划旅行方案..."):
-            from render import parse_plan
-
-            stream_placeholder = st.empty()
             status_placeholder = st.empty()
-            report = RunReport()
-
-            async def _collect():
-                results = []
-                async for token in planner.stream(prompt, request=request, report=report):
-                    results.append(token)
-                    if token.startswith('\n') and token.endswith('...\n'):
-                        status_placeholder.markdown(token.strip())
-                return results
-
+            report=RunReport()
+            def progress(token):
+                if token.startswith('\n') and token.endswith('...\n'):
+                    status_placeholder.markdown(token.strip())
             try:
-                tokens = asyncio.run(_collect())
-            except (PlanValidationError, ExecutionLimitError, TimeoutError, PlanningServiceError) as exc:
-                st.session_state.plan_data = None
-                st.session_state.plan_raw = ''
-                st.session_state.run_report = asdict(report)
+                saved=asyncio.run(get_service().create(prompt,request,on_progress=progress,report=report))
+            except (PlanValidationError, ExecutionLimitError, TimeoutError, PlanningServiceError,ValueError) as exc:
                 st.error(str(exc) or "执行超时，请缩小需求后重试。")
                 st.json(asdict(report))
                 st.stop()
-            st.session_state.run_report = asdict(report)
-
-            # 分离状态行和内容
-            full_text = ""
-            status_lines = []
-            for token in tokens:
-                stripped = token.strip()
-                if token.startswith('\n') and token.endswith('...\n'):
-                    status_lines.append(stripped)
-                else:
-                    full_text += token
-
-            # 显示状态
-            if status_lines:
-                status_placeholder.markdown(
-                    "  \n".join(status_lines) + "  \n✅ 生成完成！"
-                )
-
-            # 解析并存储
-            plan = parse_plan(full_text)
-            st.session_state.plan_data = plan
-            st.session_state.plan_raw = full_text
-            st.session_state.status_lines = status_lines
-
+            load_saved(saved)
+            st.session_state.run_report=get_store().history(saved.conversation_id)['runs'][-1]
         st.rerun()
 
 
 # ============ 结果展示 ============
+if st.session_state.get('conversation_id') and st.session_state.plan_data:
+    from storage import VersionConflict
+    from schemas import PlanValidationError
+    from reliability import ExecutionLimitError,PlanningServiceError,RunReport
+    cid=st.session_state.conversation_id
+    version=st.session_state.plan_version
+    st.caption(f'会话 {cid[:8]} · 当前查看版本 v{version}')
+    current=get_store().get_plan(cid,version)
+    with st.form('revise_plan'):
+        instruction=st.text_area('继续修改行程',placeholder='例如：第二天减少一个景点，安排得轻松一些')
+        preserve_hotels=st.checkbox('保留已有酒店及报价',value=True)
+        revised_budget=st.number_input('修改后的总预算上限（元，0表示不限）',min_value=0.0,
+                                       value=float(current.request.get('budget_limit') or 0),step=100.0,
+                                       key=f'revise_budget_{cid}_{version}')
+        revise_btn=st.form_submit_button('保存为新版本')
+    if revise_btn:
+        report=RunReport()
+        try:
+            with st.spinner('正在修改；通过校验后保存新版本...'):
+                updated=asyncio.run(get_service().revise(cid,instruction,expected_version=version,
+                    preserve_hotels=preserve_hotels,request_updates={'budget_limit':revised_budget or None},report=report))
+            load_saved(updated)
+            st.session_state.run_report=get_store().history(cid)['runs'][-1]
+            st.rerun()
+        except (ValueError,VersionConflict,PlanValidationError,ExecutionLimitError,TimeoutError,PlanningServiceError) as exc:
+            st.error(str(exc) or '修改失败，已保存的行程版本保持不变。')
+            st.session_state.run_report=asdict(report)
+    with st.expander('会话历史与全部执行记录'):
+        st.json(get_store().history(cid))
+
 if st.session_state.get('run_report'):
     with st.expander('本次执行与校验记录', expanded=False):
         st.json(st.session_state.run_report)

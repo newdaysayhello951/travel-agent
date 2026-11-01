@@ -159,7 +159,7 @@ def recalculate_budget(text):
     return json.dumps(data, ensure_ascii=False), changes
 
 
-def validate_repair_facts(original: str, revised: str):
+def validate_repair_facts(original: str, revised: str, request: TripRequest | None = None):
     """修正器仅修结构和汇总，不能静默替换已有地点、报价和天气。"""
     try:
         old, new = decode_plan_json(original), decode_plan_json(revised)
@@ -177,6 +177,16 @@ def validate_repair_facts(original: str, revised: str):
                     walk(value, after[key], here)
         elif isinstance(before, list) and isinstance(after, list):
             if len(before) != len(after):
+                # 显式景点上限允许删除超额项，但留下的每个完整条目必须来自草稿，
+                # 不借机换景点、改票价、增加新事实或删除其他明细。
+                limit=request.max_attractions_per_day if request else None
+                if (limit is not None and re.fullmatch(r'days\.\d+\.attractions',path)
+                        and len(before)>limit and len(after)<=limit):
+                    remaining=list(before)
+                    for item in after:
+                        if item not in remaining:break
+                        remaining.remove(item)
+                    else:return
                 errors.append(issue(path, 'items_changed', '结构修正不得增删已有明细'))
             else:
                 for i, (a,b) in enumerate(zip(before,after)):

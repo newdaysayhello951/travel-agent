@@ -158,7 +158,7 @@ class TripPlanner:
                     try:
                         data = validate_plan_text(text, request)
                         if attempt:
-                            validate_repair_facts(original, text)
+                            validate_repair_facts(original, text, request)
                     except PlanValidationError as exc:
                         report.attempts.append({'attempt':attempt, 'status':'invalid', 'issues':exc.issues, 'normalizations':changes})
                         if attempt >= CONFIG.plan_repairs:
