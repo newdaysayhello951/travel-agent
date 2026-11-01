@@ -69,11 +69,15 @@ def check_plan(plan,facts):
             if start is not None and last_entry is not None and start>last_entry:
                 note(errors,path,'after_last_entry','游览起始晚于资料记载的停止入馆时间',source)
             price=fact.get('adult_ticket_price')
-            if price is not None and item.get('ticket_price_basis')=='adult_per_person':
+            if price==0 and item['ticket_price']>0 and item.get('ticket_price_basis') in (None,'adult_per_person','basic_entry'):
+                note(errors,path+'.ticket_price','free_entry_has_charge','资料记载基础入场免费，不能直接列为收费门票；二次消费须单独说明',source)
+            elif price is not None and item.get('ticket_price_basis')=='adult_per_person':
                 if abs(item['ticket_price']-price)>.02:note(errors,path+'.ticket_price','price_mismatch','成人单人门票与来源资料不一致，不含优惠或额外展馆',source)
             else:note(unknown,path+'.ticket_price','unverified_price_basis','缺少相同计价口径的票价资料，估算不等于实时报价',source)
             if fact.get('reservation_required'):
                 note(unknown,path,'reservation_required','需要预约，须由用户确认有效预约凭证，模型声明不能代替凭证',source)
+    if not checks and not unknown:
+        note(unknown,'days','no_verifiable_activities','没有可核验活动，不能视为已完成事实检查')
     # 即使已知字段全部一致，也不把外部世界或预订可用性标记为全部验证。
     return {'status':'conflicts' if errors else 'needs_review' if unknown else 'consistent_with_sources',
             'checked_items':checks,'errors':errors,'unverified':unknown,'sources':sorted(sources),

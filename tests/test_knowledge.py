@@ -27,6 +27,16 @@ class KnowledgeTests(unittest.TestCase):
 
 
 class FactTests(unittest.TestCase):
+    def test_no_activities_are_not_treated_as_verified(self):
+        data=plan();data['days'][0]['attractions']=[]
+        self.assertEqual(check_plan(data,[])['status'],'needs_review')
+
+    def test_free_entry_requires_separating_optional_charges(self):
+        data=plan();rule=self.rule();rule['adult_ticket_price']=0
+        result=check_plan(data,[rule])
+        self.assertIn('free_entry_has_charge',[x['code'] for x in result['errors']])
+        data['days'][0]['attractions'][0]['ticket_price_basis']='package'
+        self.assertNotIn('free_entry_has_charge',[x['code'] for x in check_plan(data,[rule])['errors']])
     def rule(self):return {'name':'岳麓书院','valid_from':'2026-01-01','valid_until':'2026-12-31','opens':'09:00','closes':'17:00','last_entry':'16:00','adult_ticket_price':40,'source_url':'https://example.org/rules'}
     def test_closed_hours_price_and_reservation_are_not_claimed_pass(self):
         data=plan();a=data['days'][0]['attractions'][0]
