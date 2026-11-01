@@ -4,6 +4,7 @@ import secrets
 import time
 from uuid import uuid4
 from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
 from sqlalchemy import String,Text,BigInteger,ForeignKey,select,delete
 from sqlalchemy.orm import Mapped,mapped_column
 from sqlalchemy.exc import IntegrityError
@@ -30,7 +31,8 @@ class UsernameUnavailable(ValueError):pass
 
 class AuthStore:
     def __init__(self,store):
-        self.sessions=store.sessions;self.passwords=PasswordHash.recommended()
+        # 保持64MiB/3轮强度，单线程避免本机Windows原生并行验证等待。
+        self.sessions=store.sessions;self.passwords=PasswordHash((Argon2Hasher(parallelism=1),))
         self.dummy=self.passwords.hash(secrets.token_urlsafe(24))
 
     def register(self,username,password):

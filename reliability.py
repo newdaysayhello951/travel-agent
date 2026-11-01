@@ -42,6 +42,10 @@ class PlanningServiceError(RuntimeError):
     """对外不暴露包含URL、凭据的原始SDK异常。"""
 
 
+class ServiceQuotaError(PlanningServiceError):
+    status_code=429
+
+
 def transient_error(exc):
     if isinstance(exc, ExceptionGroup):
         return bool(exc.exceptions) and all(transient_error(e) for e in exc.exceptions)
@@ -102,11 +106,16 @@ async def call_with_retry(handler, request, *, timeout, retries, max_calls):
         try:
             result = await asyncio.wait_for(handler(request), timeout)
             if isinstance(result, ToolMessage) and result.status == 'error':
+                from quota import is_quota_error
+                if is_quota_error(RuntimeError(str(result.content))):
+                    raise ServiceQuotaError('上游额度或频率受限，请稍后重试')
                 return safe_tool_error(request)
             if cache_key is not None and isinstance(result, ToolMessage):
                 budget.cache[cache_key] = result.model_copy(update={'id':None})
             return result
         except Exception as exc:
+            from quota import is_quota_error
+            if is_quota_error(exc):raise ServiceQuotaError('上游额度或频率受限，请稍后重试') from None
             if not transient_error(exc):
                 raise
             if attempt == retries:

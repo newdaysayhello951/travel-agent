@@ -28,17 +28,18 @@ async def main():
     cases=json.loads((ROOT/'evals/cases.json').read_text(encoding='utf-8'))
     ids={int(x) for x in args.ids.split(',')}
     if ids-{c['id'] for c in cases}:raise ValueError('案例不存在')
-    paths=['agents/planner.py','agents/multi.py','schemas.py','intake.py','prompts.py','config.py','reliability.py','evals/cases.json','evals/judge.py','evals/paired.py']
+    paths=['agents/planner.py','agents/multi.py','schemas.py','intake.py','prompts.py','config.py','reliability.py','quota.py','mcp_client.py','evals/cases.json','evals/judge.py','evals/paired.py']
     metadata={'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
               'sources':{p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths},
               'model':CONFIG.model_name,'ids':sorted(ids),'rounds':args.rounds,
               'settings':{p:getattr(CONFIG,p) for p in ('temperature','run_timeout','tool_timeout','tool_retries','max_tool_calls','max_model_calls','recursion_limit','plan_repairs','llm_enable_thinking')}}
-    path=ROOT/args.output;rows=[]
+    path=ROOT/args.output;rows=[];interruptions=[]
     if args.resume and path.exists():
         old=json.loads(path.read_text(encoding='utf-8'))
         if any(old.get(k)!=metadata[k] for k in ('sources','model','ids','rounds','settings')):
             raise ValueError('对照源码、模型、案例或预算改变，请使用新文件')
-        rows=old['results'];metadata['revision']=old['revision']
+        interruptions=old.get('interruptions',[])+[r for r in old['results'] if r['status']=='quota_limited']
+        rows=[r for r in old['results'] if r['status']!='quota_limited'];metadata['revision']=old['revision']
     class Tokens(AsyncCallbackHandler):
         def __init__(self):self.total=0
         async def on_llm_end(self,response,**kwargs):
@@ -60,14 +61,18 @@ async def main():
                     row.update(output=text,status=report.status)
                 except Exception as exc:
                     row.update(status='failed',error_type=type(exc).__name__)
+                    from quota import is_quota_error
+                    if is_quota_error(exc):
+                        row.update(status='quota_limited',stop_reason='upstream_quota_or_429')
                     if isinstance(exc,PlanValidationError):row['validation_errors']=exc.issues
                 finally:await planner.mcp.close()
                 row.update(run_report=asdict(report),seconds=report.seconds,reported_tokens=tokens.total or None)
                 row['assessment']=judge(case,row);rows.append(row)
                 path.parent.mkdir(parents=True,exist_ok=True)
-                path.write_text(json.dumps({**metadata,'results':rows},ensure_ascii=False,indent=2),encoding='utf-8')
+                path.write_text(json.dumps({**metadata,'results':rows,'interruptions':interruptions},ensure_ascii=False,indent=2),encoding='utf-8')
                 print(json.dumps({'id':case['id'],'round':round_number,'architecture':architecture,'status':row['status'],
                                   'rule_pass':row['assessment']['rule_pass'],'seconds':report.seconds,
                                   'models':report.model_calls,'tools':report.tool_attempts},ensure_ascii=True),flush=True)
+                if row['status']=='quota_limited':return
 
 if __name__=='__main__':asyncio.run(main())
