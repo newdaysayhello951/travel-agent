@@ -14,6 +14,8 @@ from schemas import TripRequest,PlanValidationError
 from storage import PlanStore,ConversationNotFound,VersionConflict
 from reliability import ExecutionLimitError,PlanningServiceError
 from travel_service import TravelService
+from fact_checks import FactRule
+from datetime import date
 
 
 class Credentials(BaseModel):
@@ -34,6 +36,16 @@ class RevisionInput(BaseModel):
     expected_version:int=Field(ge=1)
     request_updates:dict=Field(default_factory=dict)
     preserve_hotels:bool=True
+
+
+class DocumentInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    title:str=Field(min_length=1,max_length=200)
+    city:str=Field(min_length=1,max_length=100)
+    source_url:str=Field(max_length=2000)
+    content:str=Field(min_length=1,max_length=50000)
+    expires_on:date
+    facts:list[FactRule]=Field(default_factory=list,max_length=100)
 
 
 class RateLimiter:
@@ -103,6 +115,23 @@ def create_app(store=None,planner_factory=None):
     def me(user=Depends(identity)):return {'user_id':user}
     @app.get('/conversations')
     def conversations(scoped=Depends(scope)):return scoped.list_conversations()
+    @app.get('/knowledge')
+    def documents(scoped=Depends(scope)):
+        from knowledge import KnowledgeStore
+        return KnowledgeStore(scoped).list_documents()
+    def save_document(body,scoped,document_id=None):
+        from knowledge import KnowledgeStore
+        fields=body.model_dump(mode='json')
+        return {'document_id':KnowledgeStore(scoped).put(**fields,document_id=document_id)}
+    @app.post('/knowledge',status_code=201)
+    def add_document(body:DocumentInput,scoped=Depends(scope)):return save_document(body,scoped)
+    @app.put('/knowledge/{document_id}')
+    def update_document(document_id:str,body:DocumentInput,scoped=Depends(scope)):return save_document(body,scoped,document_id)
+    @app.get('/knowledge/search')
+    def search_knowledge(query:str,city:str,scoped=Depends(scope)):
+        from knowledge import KnowledgeStore
+        if len(query)>10000 or len(city)>100:raise HTTPException(422,'检索参数过长')
+        return KnowledgeStore(scoped).retrieve(query,city)
     @app.get('/conversations/{cid}')
     def latest(cid:str,scoped=Depends(scope)):
         saved=scoped.get_plan(cid);return asdict(saved) if saved else {'version':0}

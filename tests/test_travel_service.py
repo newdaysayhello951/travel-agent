@@ -72,6 +72,23 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.get_plan(first.conversation_id).version,1)
         self.assertEqual(self.store.history(first.conversation_id)['runs'][-1]['status'],'cancelled')
 
+    async def test_rag_citations_and_original_query_are_persisted_separately(self):
+        import re
+        from datetime import date,timedelta
+        self.service.knowledge.put('长沙资料','长沙','https://example.org/visit','长沙历史文化参观建议',(date.today()+timedelta(days=7)).isoformat())
+        async def answer(prompt,request,report):
+            marker=re.search(r'K[0-9a-f]{12}_\d+_[0-9a-f]{8}',prompt).group()
+            result=plan();result['overall_suggestions']+=' ['+marker+']';report.status='valid_plan'
+            return json.dumps(result)
+        self.service.planner.invoke=answer
+        saved=await self.service.create('长沙历史文化',self.request)
+        self.assertEqual(len(saved.plan['cited_sources']),1)
+        self.assertEqual(self.store.history(saved.conversation_id)['messages'][0]['content'],'长沙历史文化')
+
+    async def test_unknown_citation_is_rejected(self):
+        self.response['overall_suggestions']+=' [K012345abcdef_0_012345ab]'
+        with self.assertRaises(PlanValidationError):await self.service.create('fixture',self.request)
+
 
 class ConstrainedRepairTests(unittest.TestCase):
     def test_only_explicit_excess_attractions_can_be_removed(self):

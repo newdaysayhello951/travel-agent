@@ -13,7 +13,7 @@ Streamlit / 持久化CLI → TravelService → TripPlanner（单Agent）→ 模�
                          └──── 有效JSON行程 ──┘ → 展示与历史版本
 ```
 
-技术栈：Python 3.12、LangChain、LangGraph（create_agent 底层运行时）、MCP、AsyncIO、Streamlit、Pydantic、SQLAlchemy、SQLite、python-dotenv。
+技术栈：Python 3.12、LangChain、LangGraph（create_agent底层运行时）、MCP、AsyncIO、Streamlit、FastAPI、Pydantic、SQLAlchemy、Alembic、SQLite/PostgreSQL驱动、Argon2认证、BM25检索、python-dotenv。
 
 ## 启动
 
@@ -49,9 +49,13 @@ Copy-Item .env.example .env
 
 ## 历史会话与继续修改
 
+页面默认注册登录，按用户隔离记录；旧本地记录仅在操作者显式开启`TRAVEL_LOCAL_MODE=1`时显示。认证API启动与接口说明见[认证与HTTP接口](docs/认证与HTTP接口.md)。
+
 页面侧栏可加载已保存会话和历史版本，在行程上方输入修改要求并保存为新版本；预算上限可显式调整，酒店及报价可锁定。修改失败不替换旧行程，过期版本修改会被拒绝。失败执行同样保留诊断记录。
 
 默认数据库为`.data/travel-agent.db`，重启后保留；该目录已忽略，不入Git。持久化CLI使用`travel_cli.py`，原`Agent.py`仍为即时问答。命令、约束语义及数据库边界见[持久化与多轮修改](docs/持久化与多轮修改.md)。
+
+资料支持按用户导入、更新、过期过滤与带来源检索。规划区分检索候选和实际引用；事实检查把明确冲突与缺少依据分开，未知不能算通过。使用方法和能力边界见[知识检索与事实检查](docs/知识检索与事实检查.md)。
 
 ## 行程校验与执行边界
 
@@ -83,7 +87,7 @@ Copy-Item .env.example .env
 
 ## 当前边界
 
-- 暂未实现 FastAPI、RAG、多用户认证及Alembic升级迁移。PostgreSQL可配置SQLAlchemy连接，但尚未验证真实服务；本次实测使用SQLite。
+- 已有FastAPI、词法RAG、多用户隔离及Alembic迁移。仍无向量检索、密码找回或跨进程限流；不能认定适合直接公网生产部署。PostgreSQL实连结果见后续验证记录。
 - 天气真实性、景点开放时间、交通时间冲突和估算价格是否合理仍需要进一步校验；当前结构及预算一致性检查不能保证旅行可执行。
 - 自动修正无法保证一定成功。可解析草稿的已有名称、地址、坐标、价格、天气以及明细数量在修正后会检查是否被改动；触发保护则拒绝。无法解析原稿时不能进行完整事实对比，缺少信息或约束无法满足时仍应明确失败。草稿超过60000字符时停止修正，避免上下文无界增长。
 - 如仅在受限执行环境出现 SSL / pywin32 DLL 导入失败，先在普通终端运行相同命令核实，再判断是否需要重装依赖。

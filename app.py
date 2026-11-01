@@ -254,6 +254,22 @@ with st.sidebar:
         else:
             st.caption('尚无合格行程；可查看失败记录后重新规划。')
             with st.expander('失败执行记录'):st.json(history['runs'])
+    with st.expander('知识库资料导入与更新'):
+        from knowledge import KnowledgeStore
+        kb=KnowledgeStore(get_store())
+        documents=kb.list_documents()
+        choices={d['id']:d['title'] for d in documents}
+        replacement=st.selectbox('更新目标',['']+list(choices),format_func=lambda key:choices.get(key,'新增资料'))
+        uploaded=st.file_uploader('资料JSON（含来源、城市和过期日期）',type=['json'])
+        if st.button('保存资料') and uploaded:
+            try:
+                if uploaded.size>200000:raise ValueError('文件过大')
+                from api import DocumentInput
+                body=DocumentInput.model_validate(json.loads(uploaded.getvalue()))
+                kb.put(**body.model_dump(mode='json'),document_id=replacement or None)
+                st.success('资料已保存；过期资料不参与检索。')
+            except Exception:st.error('导入失败，请检查资料格式、有效日期和来源链接。')
+        if documents:st.dataframe(documents,hide_index=True)
 
 # 未开始时的引导页
 if not submit_btn and st.session_state.plan_data is None:
@@ -342,6 +358,14 @@ if st.session_state.get('run_report'):
         st.json(st.session_state.run_report)
 plan = st.session_state.plan_data
 if plan is not None:
+    facts=plan.get('fact_check')
+    if facts:
+        st.warning('行程结构校验通过，事实仍需按来源与预约凭证核实。')
+        with st.expander('事实检查与待核实项目'):
+            st.json(facts)
+    with st.expander('检索参考资料与实际引用'):
+        st.caption('检索候选不等于模型实际引用；引用来自当前用户知识库，不代表网站内容已自动核实。')
+        st.json({'retrieved':plan.get('knowledge_references',[]),'cited':plan.get('cited_sources',[])})
     # 显示状态
     if "status_lines" in st.session_state and st.session_state.status_lines:
         with st.expander("🔍 规划过程", expanded=False):
