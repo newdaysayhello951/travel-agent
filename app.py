@@ -1,6 +1,7 @@
 """智能旅行助手 — Streamlit Web 界面。"""
 import asyncio
 import json
+import os
 from dataclasses import asdict
 from datetime import date
 
@@ -54,10 +55,26 @@ def get_planner():
 
 
 @st.cache_resource
-def get_store():
+def get_database():
     from config import CONFIG  # 先加载.env，包含可选DATABASE_URL
     from storage import PlanStore
     return PlanStore()
+
+
+def get_store():
+    return get_database().for_owner(st.session_state.get('user_id','local'))
+
+
+@st.cache_resource
+def get_auth():
+    from auth import AuthStore
+    return AuthStore(get_database())
+
+
+@st.cache_resource
+def get_login_limiter():
+    from api import RateLimiter
+    return RateLimiter()
 
 
 def get_service():
@@ -123,6 +140,38 @@ _STREAM_LABELS = {
 
 # ---- 主 UI ----
 st.markdown('<div class="main-header">🧳 智能旅行助手</div>', unsafe_allow_html=True)
+
+# 本机模式只能由启动服务的操作者通过环境变量开启，不能由访客选择。
+from config import CONFIG
+if os.getenv('TRAVEL_LOCAL_MODE')!='1':
+    from auth import AuthenticationError,UsernameUnavailable
+    if st.session_state.get('auth_token'):
+        try:
+            st.session_state.user_id=get_auth().authenticate(st.session_state.auth_token)
+        except AuthenticationError:
+            st.session_state.clear();st.rerun()
+    else:
+        st.info('登录后查看和修改自己的旅行记录。旧版本本地记录保留在本机模式，不自动分配给新账号。')
+        with st.form('account',clear_on_submit=True):
+            username=st.text_input('用户名',max_chars=40)
+            password=st.text_input('密码（12至128位）',type='password',max_chars=128)
+            login=st.form_submit_button('登录')
+            register=st.form_submit_button('注册')
+        if login or register:
+            try:
+                get_login_limiter().check(('web-account',username.lower()),10)
+                if register:
+                    get_auth().register(username,password);st.success('注册成功，请登录。')
+                else:
+                    token=get_auth().login(username,password)
+                    st.session_state.auth_token=token
+                    st.session_state.user_id=get_auth().authenticate(token)
+                    st.rerun()
+            except (ValueError,UsernameUnavailable,AuthenticationError):st.error('注册或登录失败，请检查用户名及密码。')
+            except Exception:st.error('请求过于频繁或服务不可用，请稍后重试。')
+        st.stop()
+    if st.sidebar.button('退出登录'):
+        get_auth().logout(st.session_state.auth_token);st.session_state.clear();st.rerun()
 
 # ============ 侧边栏: 参数输入 ============
 with st.sidebar:
