@@ -8,6 +8,7 @@ from agents.planner import TripPlanner
 from reliability import ExecutionBudget, ExecutionLimitError, PlanningServiceError, RunReport, current_budget, transient_error, call_with_retry
 from schemas import PlanValidationError, TripRequest, validate_plan_text
 from test_reliability import plan
+from intake import IntakeDecision
 
 
 def response(data):
@@ -18,6 +19,7 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
     def planner(self, draft, repaired):
         llm = SimpleNamespace(ainvoke=AsyncMock(return_value=response(repaired)))
         planner = TripPlanner(llm)
+        planner._intake=AsyncMock(return_value=IntakeDecision(intent='weather',city='test'))
         planner._agent = SimpleNamespace(ainvoke=AsyncMock(return_value={'messages':[response(draft)]}))
         return planner
 
@@ -139,12 +141,30 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(reports[0].run_id,reports[1].run_id)
         self.assertIsNone(current_budget.get())
 
-    async def test_repair_must_not_change_prices_to_meet_budget(self):
+    async def test_repair_ignores_unrelated_price_changes(self):
         broken=plan();broken['days'][0]['day_index']=2
         revised=plan();revised['days'][0]['hotel']['estimated_cost']=1
         planner=self.planner(broken,revised)
+        result=json.loads(await planner.invoke('test'))
+        self.assertEqual(result['days'][0]['hotel']['estimated_cost'],200)
+
+    async def test_repair_rejects_unauthorized_patch(self):
+        broken=plan();broken['days'][0]['day_index']=2
+        planner=self.planner(broken,{'patches':[{'path':'days.0.hotel.name','value':'invented'}]})
         with self.assertRaises(PlanValidationError) as caught:await planner.invoke('test')
-        self.assertIn('fact_changed',{i['code'] for i in caught.exception.issues})
+        self.assertEqual(caught.exception.issues[0]['code'],'invalid_patch')
+
+    async def test_authorized_patch_only_changes_failed_field(self):
+        broken=plan();broken['days'][0]['day_index']=2
+        planner=self.planner(broken,{'patches':[{'path':'days.0.day_index','value':0}]})
+        result=json.loads(await planner.invoke('test'))
+        self.assertEqual(result['days'][0]['day_index'],0)
+        self.assertEqual(result['days'][0]['hotel'],broken['days'][0]['hotel'])
+
+    async def test_json_pointer_patch_uses_same_whitelist(self):
+        broken=plan();broken['days'][0]['day_index']=2
+        planner=self.planner(broken,[{'op':'replace','path':'/days/0/day_index','value':0}])
+        self.assertEqual(json.loads(await planner.invoke('test'))['days'][0]['day_index'],0)
 
     def test_one_complete_fence_allowed_multiple_fences_rejected(self):
         self.assertIsNotNone(validate_plan_text('行程如下：\n```json\n'+json.dumps(plan())+'\n```'))

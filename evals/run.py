@@ -17,6 +17,7 @@ async def main():
     parser.add_argument('--ids', default='1', help='逗号分隔的案例编号')
     parser.add_argument('--output', default='.work/baseline.json')
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--resume', action='store_true', help='保留已有结果，只执行缺少的案例；源文件和案例必须一致')
     args = parser.parse_args()
     from config import CONFIG
     from agents.planner import TripPlanner
@@ -24,6 +25,7 @@ async def main():
     from langchain_core.callbacks import AsyncCallbackHandler
     from reliability import RunReport
     from schemas import PlanValidationError, TripRequest
+    from evals.judge import judge, summary
 
     class Metrics(AsyncCallbackHandler):
         def __init__(self):
@@ -41,10 +43,21 @@ async def main():
                         self.tokens += usage.get('total_tokens', 0)
 
     cases = json.loads((ROOT / 'evals/cases.json').read_text(encoding='utf-8'))
-    selected = {int(x) for x in args.ids.split(',')}
+    selected = {c['id'] for c in cases} if args.ids == 'all' else {int(x) for x in args.ids.split(',')}
+    if selected - {c['id'] for c in cases}:
+        raise ValueError('案例编号不存在')
+    path = ROOT / args.output
+    source_files = ('agents/planner.py', 'prompts.py', 'config.py', 'schemas.py', 'reliability.py', 'intake.py', 'evals/cases.json', 'evals/judge.py', 'evals/run.py')
+    sources = {name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in source_files}
+    settings={name:getattr(CONFIG,name) for name in ('temperature','tool_timeout','tool_retries','max_tool_calls','max_model_calls','run_timeout','recursion_limit','plan_repairs','llm_enable_thinking')}
     rows = []
+    if args.resume and path.exists():
+        saved = json.loads(path.read_text(encoding='utf-8'))
+        if saved.get('source_hashes') != sources or saved.get('model') != CONFIG.model_name or saved.get('settings') != settings:
+            raise ValueError('源文件、案例、模型或执行参数已改变，请使用新的输出文件')
+        rows = saved['results']
     for case in cases:
-        if case['id'] not in selected:
+        if case['id'] not in selected or any(r['id']==case['id'] for r in rows):
             continue
         metrics = Metrics()
         llm = CONFIG.create_llm(streaming=False)
@@ -64,12 +77,11 @@ async def main():
             await planner.mcp.close()
         row.update(seconds=round(time.perf_counter()-start, 2), model_calls=metrics.calls or None, reported_tokens=metrics.tokens or None)
         row['run_report'] = asdict(report)
+        row['assessment'] = judge(case, row)
         rows.append(row)
-        path = ROOT / args.output
         path.parent.mkdir(parents=True, exist_ok=True)
-        sources = {name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in ('agents/planner.py', 'prompts.py', 'config.py', 'schemas.py', 'reliability.py') if (ROOT/name).exists()}
-        path.write_text(json.dumps({'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(), 'source_hashes':sources, 'model':CONFIG.model_name,'results':rows},ensure_ascii=False,indent=2),encoding='utf-8')
-        print(json.dumps({k:v for k,v in row.items() if k not in ('output','query')},ensure_ascii=True),flush=True)
+        path.write_text(json.dumps({'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(), 'source_hashes':sources, 'model':CONFIG.model_name,'settings':settings,'summary':summary(rows),'results':rows},ensure_ascii=False,indent=2),encoding='utf-8')
+        print(json.dumps({'id':row['id'],'status':row['status'],'seconds':row['seconds'],'assessment':row['assessment'],'report':row['run_report']},ensure_ascii=True),flush=True)
 
 if __name__ == '__main__':
     asyncio.run(main())

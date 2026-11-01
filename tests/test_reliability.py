@@ -20,7 +20,7 @@ def plan():
 
 class SchemaTests(unittest.TestCase):
     def test_valid_plan_and_request(self):
-        request = TripRequest(city='长沙',start_date='2026-11-10',end_date='2026-11-10',required_attractions=['岳麓书院'])
+        request = TripRequest(city='长沙',start_date='2026-11-10',end_date='2026-11-10',required_attractions=['岳麓书院'],stay_on_last_day=True)
         self.assertEqual(validate_plan_text(json.dumps(plan()), request)['budget']['total'],310)
 
     def test_bad_dates_budget_meals_and_weather_rejected(self):
@@ -86,7 +86,7 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         planner=TripPlanner(object());planner.build=slow
         previous=current_budget.get()
         with patch('agents.planner.CONFIG.run_timeout',.01):
-            with self.assertRaises(TimeoutError):await planner.invoke('test')
+            with self.assertRaises(TimeoutError):await planner.invoke('test',request=TripRequest(city='长沙',start_date='2026-11-10',end_date='2026-11-10'))
         self.assertIs(current_budget.get(),previous)
 
     async def test_stream_invalid_plan_and_recursion_not_success(self):
@@ -98,8 +98,8 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         planner._agent=SimpleNamespace(astream_events=invalid)
         with patch('agents.planner.CONFIG.plan_repairs',0):
             with self.assertRaises(PlanValidationError):
-                async for _ in planner.stream('test'):pass
+                async for _ in planner.stream('test',request=TripRequest(city='长沙',start_date='2026-11-10',end_date='2026-11-10')):pass
         self.assertIsNotNone(current_budget.get())
         async def recurse(*args, **kwargs):raise GraphRecursionError('limit')
         planner._agent=SimpleNamespace(ainvoke=recurse)
-        with self.assertRaises(ExecutionLimitError):await planner.invoke('test')
+        with self.assertRaises(ExecutionLimitError):await planner.invoke('test',request=TripRequest(city='长沙',start_date='2026-11-10',end_date='2026-11-10'))

@@ -1,6 +1,6 @@
 """行程结构和可确定的业务规则；不负责验证实时价格真实性。"""
 from datetime import date, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 import json
 import re
 
@@ -10,11 +10,15 @@ Money = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
 class TripRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     city: str = Field(min_length=1)
     start_date: date
     end_date: date
     budget_limit: Money | None = None
     required_attractions: list[str] = Field(default_factory=list)
+    max_attractions_per_day: int | None = Field(default=None, ge=1, le=10)
+    allowed_transportation_modes: list[Literal['public_transit','walking','driving','cycling','mixed']] = Field(default_factory=list)
+    stay_on_last_day: bool = False
 
     @model_validator(mode='after')
     def valid_dates(self):
@@ -52,6 +56,7 @@ class DayPlan(BaseModel):
     hotel: Hotel | None
     attractions: list[Attraction]
     meals: list[Meal]
+    transportation_mode: Literal['public_transit','walking','driving','cycling','mixed'] | None = None
 
 
 
@@ -117,11 +122,24 @@ def recalculate_budget(text):
     }
     sums['total'] = round(sum(sums.values()) + plan.budget.total_transportation,2)
     changes = []
+    modes={'public_transit':'public_transit','walking':'walking','driving':'driving','cycling':'cycling',
+           '公共交通':'public_transit','公交':'public_transit','地铁':'public_transit','公交+步行':'public_transit',
+           '步行+公交':'public_transit','地铁+步行':'public_transit','步行+地铁':'public_transit','公交+地铁':'public_transit',
+           '步行':'walking','驾车':'driving','自驾':'driving','骑行':'cycling'}
+    for i, day in enumerate(data['days']):
+        mode=modes.get(str(day.get('transportation','')).strip().lower())
+        if day.get('transportation_mode') is None and mode:
+            day['transportation_mode']=mode
+            changes.append({'path':f'days.{i}.transportation_mode','after':mode,'reason':'从明确交通文本映射标准类型'})
     for key, value in sums.items():
         before = getattr(plan.budget,key)
         if abs(before-value) > .02:
             changes.append({'path':'budget.'+key, 'before':before, 'after':value, 'reason':'由每日明细确定性加总'})
             data['budget'][key] = value
+    if not re.search(r'(费用|预算).{0,12}(估算|预估|参考)|(估算|预估).{0,12}(费用|预算)',plan.overall_suggestions):
+        notice = '费用均为估算，不代表实时可预订报价；具体价格请向服务商确认。'
+        data['overall_suggestions'] = plan.overall_suggestions.rstrip() + '\n' + notice
+        changes.append({'path':'overall_suggestions','reason':'补充费用估算标识，不修改明细价格'})
     return json.dumps(data, ensure_ascii=False), changes
 
 
@@ -208,6 +226,8 @@ def validate_plan_text(text: str, request: TripRequest | None = None) -> dict | 
     if len(set(dates)) != len(dates) or any(d not in set(expected) for d in dates):
         errors.append(issue('weather_info', 'weather_dates', '天气日期重复或不属于旅行日期'))
     if request:
+        if not request.stay_on_last_day and plan.days[-1].hotel is not None and plan.days[-1].hotel.estimated_cost > 0:
+            errors.append(issue(f'days.{len(plan.days)-1}.hotel','departure_charge','未要求返程日续住，请将返程日hotel设为null，不要修改酒店报价'))
         for field in ('city','start_date','end_date'):
             if getattr(plan, field) != getattr(request, field):
                 errors.append(issue(field, 'request_mismatch', '与明确请求不一致'))
@@ -216,6 +236,16 @@ def validate_plan_text(text: str, request: TripRequest | None = None) -> dict | 
         names = {a.name for d in plan.days for a in d.attractions}
         if not set(request.required_attractions) <= names:
             errors.append(issue('days.attractions', 'missing_required', '遗漏必去景点，请按请求名称精确匹配'))
+        for i, day in enumerate(plan.days):
+            if request.max_attractions_per_day is not None and len(day.attractions) > request.max_attractions_per_day:
+                errors.append(issue(f'days.{i}.attractions', 'too_many_attractions', f'每天最多{request.max_attractions_per_day}个景点'))
+            if request.allowed_transportation_modes and day.transportation_mode not in request.allowed_transportation_modes:
+                errors.append(issue(f'days.{i}.transportation_mode', 'transport_not_allowed', '须明确使用请求允许的交通类型'))
+            text=str(getattr(day,'transportation','')).strip().lower()
+            declared={'driving':'driving','驾车':'driving','自驾':'driving','walking':'walking','步行':'walking',
+                      'public_transit':'public_transit','公交':'public_transit','公共交通':'public_transit','地铁':'public_transit'}.get(text)
+            if request.allowed_transportation_modes and declared and declared not in request.allowed_transportation_modes:
+                errors.append(issue(f'days.{i}.transportation', 'transport_text_conflict', '交通文字与允许类型冲突，不能只改类型标签'))
     if errors:
         raise PlanValidationError(errors)
     return plan.model_dump(mode='json')

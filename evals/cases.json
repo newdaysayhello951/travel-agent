@@ -2,77 +2,331 @@
   {
     "id": 1,
     "name": "长沙自然历史",
-    "request": {"city": "长沙", "start_date": "2026-11-10", "end_date": "2026-11-12"},
-    "query": "长沙，2026-11-10至2026-11-12，喜欢自然和历史，住五一广场"
+    "request": {
+      "city": "长沙",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-12"
+    },
+    "query": "长沙，2026-11-10至2026-11-12，喜欢自然和历史，住五一广场",
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "自然和历史偏好、五一广场住宿位置"
+      ]
+    }
   },
   {
     "id": 2,
     "name": "杭州博物馆",
-    "query": "杭州两日游，2026-11-10至11日，喜欢博物馆"
+    "query": "杭州两日游，2026-11-10至11日，喜欢博物馆",
+    "request": {
+      "city": "杭州",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-11"
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "所选景点是否符合博物馆偏好"
+      ]
+    }
   },
   {
     "id": 3,
     "name": "北京亲子",
-    "query": "北京三日游，2026-11-10至12日，带6岁儿童"
+    "query": "北京三日游，2026-11-10至12日，带6岁儿童",
+    "request": {
+      "city": "北京",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-12"
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "亲子适宜性与行程强度"
+      ]
+    }
   },
   {
     "id": 4,
     "name": "成都老人",
-    "query": "成都两日游，2026-11-10至11日，老人同行，减少步行"
+    "query": "成都两日游，2026-11-10至11日，老人同行，减少步行",
+    "request": {
+      "city": "成都",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-11"
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "老年人适宜性与步行强度"
+      ]
+    }
   },
   {
     "id": 5,
     "name": "上海预算",
-    "query": "上海两日游，2026-11-10至11日，一人预算1000元"
+    "query": "上海两日游，2026-11-10至11日，一人预算1000元",
+    "request": {
+      "city": "上海",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-11",
+      "budget_limit": 1000
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "费用是否明确为估算，不冒充实时可订报价"
+      ]
+    }
   },
   {
     "id": 6,
     "name": "西安必去",
-    "query": "西安三日游，2026-11-10至12日，必须去陕西历史博物馆"
+    "query": "西安三日游，2026-11-10至12日，必须去陕西历史博物馆",
+    "request": {
+      "city": "西安",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-12",
+      "required_attractions": [
+        "陕西历史博物馆"
+      ]
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "博物馆预约、开放时间是否明确待确认"
+      ]
+    }
   },
   {
     "id": 7,
     "name": "南京住宿",
-    "query": "南京两日游，2026-11-10至11日，酒店靠近新街口"
+    "query": "南京两日游，2026-11-10至11日，酒店靠近新街口",
+    "request": {
+      "city": "南京",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-11"
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "住宿是否确实接近新街口"
+      ]
+    }
   },
   {
     "id": 8,
     "name": "苏州公交",
-    "query": "苏州两日游，2026-11-10至11日，只乘公共交通"
+    "query": "苏州两日游，2026-11-10至11日，只乘公共交通",
+    "request": {
+      "city": "苏州",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-11",
+      "allowed_transportation_modes": [
+        "public_transit",
+        "walking"
+      ]
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "实际路线是否满足公共交通偏好"
+      ]
+    }
   },
   {
     "id": 9,
     "name": "厦门慢游",
-    "query": "厦门两日游，2026-11-10至11日，每天最多两个景点"
+    "query": "厦门两日游，2026-11-10至11日，每天最多两个景点",
+    "request": {
+      "city": "厦门",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-11",
+      "max_attractions_per_day": 2
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": []
+    }
   },
   {
     "id": 10,
     "name": "重庆饮食",
-    "query": "重庆两日游，2026-11-10至11日，不吃辣"
+    "query": "重庆两日游，2026-11-10至11日，不吃辣",
+    "request": {
+      "city": "重庆",
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-11"
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "菜品与推荐是否真正不辣"
+      ]
+    }
   },
   {
     "id": 11,
     "name": "未来天气",
-    "query": "杭州，2027-06-01至03日，按实际天气规划"
+    "query": "杭州，2027-06-01至03日，按实际天气规划",
+    "request": {
+      "city": "杭州",
+      "start_date": "2027-06-01",
+      "end_date": "2027-06-03"
+    },
+    "expectation": {
+      "statuses": [
+        "valid_plan"
+      ],
+      "weather_empty": true,
+      "manual_checks": [
+        "是否明确远期天气不可确认"
+      ]
+    }
   },
   {
     "id": 12,
     "name": "日期冲突",
-    "query": "北京三日游，2026-11-12出发，2026-11-10结束"
+    "query": "北京三日游，2026-11-12出发，2026-11-10结束",
+    "expectation": {
+      "statuses": [
+        "text"
+      ],
+      "manual_checks": [
+        "是否明确指出日期先后冲突并请求修正"
+      ],
+      "keyword_groups": [
+        [
+          "日期",
+          "时间"
+        ],
+        [
+          "冲突",
+          "早于",
+          "晚于",
+          "矛盾",
+          "先后",
+          "有误",
+          "不一致"
+        ]
+      ],
+      "max_tool_attempts": 0
+    }
   },
   {
     "id": 13,
     "name": "预算冲突",
-    "query": "上海三日游住五星酒店，总预算100元"
+    "query": "上海三日游住五星酒店，总预算100元",
+    "expectation": {
+      "statuses": [
+        "text"
+      ],
+      "manual_checks": [
+        "是否指出五星住宿与100元预算冲突并请求调整"
+      ],
+      "keyword_groups": [
+        [
+          "预算",
+          "100"
+        ],
+        [
+          "不足",
+          "无法",
+          "不现实",
+          "不够",
+          "冲突",
+          "调整",
+          "增加",
+          "提高",
+          "难以",
+          "不太可能",
+          "不可能"
+        ]
+      ],
+      "max_tool_attempts": 0
+    }
   },
   {
     "id": 14,
     "name": "缺少目的地",
-    "query": "安排三天旅行，喜欢博物馆"
+    "query": "安排三天旅行，喜欢博物馆",
+    "expectation": {
+      "statuses": [
+        "text"
+      ],
+      "manual_checks": [
+        "是否先追问目的地而非自行选城市"
+      ],
+      "keyword_groups": [
+        [
+          "城市",
+          "目的地",
+          "哪里",
+          "去哪",
+          "地点"
+        ],
+        [
+          "请",
+          "告诉",
+          "提供",
+          "确认",
+          "选择",
+          "？",
+          "?",
+          "哪"
+        ]
+      ],
+      "max_tool_attempts": 0
+    }
   },
   {
     "id": 15,
     "name": "仅查天气",
-    "query": "只查询北京当前天气，不生成行程"
+    "query": "只查询北京当前天气，不生成行程",
+    "expectation": {
+      "statuses": [
+        "text"
+      ],
+      "manual_checks": [
+        "天气内容是否与实际工具返回一致"
+      ],
+      "keyword_groups": [
+        [
+          "北京"
+        ]
+      ],
+      "min_tool_attempts": 1
+    }
   }
 ]

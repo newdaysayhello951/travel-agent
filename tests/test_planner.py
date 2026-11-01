@@ -9,6 +9,7 @@ os.environ.setdefault('LLM_API_KEY', 'test-only')
 os.environ.setdefault('LLM_MODEL', 'test-only')
 from agents.planner import TripPlanner
 from render import parse_plan
+from schemas import TripRequest
 
 
 class PlannerTests(unittest.IsolatedAsyncioTestCase):
@@ -37,7 +38,7 @@ class PlannerTests(unittest.IsolatedAsyncioTestCase):
         planner = TripPlanner(object())
         planner._agent = SimpleNamespace(astream_events=events)
         with patch('agents.planner.validate_plan_text', return_value=None):
-            result = ''.join([chunk async for chunk in planner.stream('test')])
+            result = ''.join([chunk async for chunk in planner.stream('test',request=TripRequest(city='New York',start_date='2026-11-10',end_date='2026-11-10'))])
         self.assertIn('New York', result)
         self.assertIn('查询天气', result)
 

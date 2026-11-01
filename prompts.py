@@ -26,6 +26,7 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
    同城出行时两者填同一个城市名。
 
 ## 工作流程
+明确约束中的max_attractions_per_day限制每天景点数量；allowed_transportation_modes非空时，每天必须设置transportation_mode为允许值（public_transit公交/地铁，walking步行，driving驾车，cycling骑行，mixed混合），文字交通安排也必须一致。
 工具调用要节制：先各做一次景点和酒店搜索，复用返回的多个POI，住宿优先复用一家酒店；
 只有关键信息确实缺失时才查询详情，不要逐个重复查所有POI。通常最多8次搜索/详情，
 每个旅行日最多查询2条关键交通路线；收到工具错误时说明信息缺失，不循环查询。

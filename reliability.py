@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from langchain.agents.middleware import wrap_tool_call, wrap_model_call
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, SystemMessage
 
 
 @dataclass
@@ -16,6 +16,7 @@ class ExecutionBudget:
     model_calls: int = 0
     cache: dict = field(default_factory=dict)
     cache_hits: int = 0
+    finalization_forced: bool = False
 
 
 @dataclass
@@ -26,6 +27,7 @@ class RunReport:
     tool_attempts: int = 0
     model_calls: int = 0
     cache_hits: int = 0
+    finalization_forced: bool = False
     seconds: float = 0
 
 
@@ -58,9 +60,18 @@ def reserve_model_call(max_calls):
     budget.model_calls += 1
 
 
-def model_reliability(max_calls):
+def model_reliability(max_calls, max_tool_calls=24):
     @wrap_model_call
     async def guarded_model(request, handler):
+        budget = current_budget.get()
+        if budget and (budget.cache_hits >= 3 or budget.model_calls >= max(1,max_calls-2)
+                       or budget.attempts >= max(1,max_tool_calls-4)):
+            budget.finalization_forced = True
+            original = request.system_message.content if request.system_message else ''
+            if not isinstance(original,str):
+                original=json.dumps(original,ensure_ascii=False)
+            request=request.override(tools=[],tool_choice=None,
+                system_message=SystemMessage(content=original+'\n查询阶段已经结束，不再调用工具。按用户原始任务输出最终结果：只查天气则简洁回答天气，规划任务则输出行程JSON；未知天气留空，缺失路线标为待确认。严禁编造查询事实。信息根本不足时明确说明。'))
         reserve_model_call(max_calls)
         return await handler(request)
     return guarded_model
@@ -99,5 +110,9 @@ async def call_with_retry(handler, request, *, timeout, retries, max_calls):
 def tool_reliability(timeout, retries, max_calls):
     @wrap_tool_call
     async def guarded(request, handler):
-        return await call_with_retry(handler, request, timeout=timeout, retries=retries, max_calls=max_calls)
+        try:
+            return await call_with_retry(handler, request, timeout=timeout, retries=retries, max_calls=max_calls)
+        except ExecutionLimitError:
+            return ToolMessage(content='本次查询预算已用完，停止调用工具，只用已有资料生成结果；未知信息明确标记待确认。',
+                               tool_call_id=request.tool_call['id'],status='error')
     return guarded
