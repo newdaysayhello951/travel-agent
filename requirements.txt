@@ -25,3 +25,5 @@ python-dotenv==1.2.4
 pydantic==2.14.1                 # 行程结构及业务校验
 httpx==0.28.1                   # 识别实际HTTP传输超时及连接错误
 SQLAlchemy==2.1.6               # 会话、行程版本、执行记录持久化
+alembic==1.20.1                 # 数据库结构迁移
+psycopg[binary]==3.3.6          # PostgreSQL驱动

@@ -78,7 +78,8 @@ class PlanStore:
             @event.listens_for(self.engine,'connect')
             def foreign_keys(connection,_):
                 cursor=connection.cursor();cursor.execute('PRAGMA foreign_keys=ON');cursor.close()
-        Base.metadata.create_all(self.engine)
+        from db_migrations import upgrade_database
+        upgrade_database(self.engine)
         self.sessions=sessionmaker(self.engine,expire_on_commit=False)
 
     def close(self):self.engine.dispose()
