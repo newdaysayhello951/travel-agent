@@ -21,6 +21,13 @@ def render(data):
         lines.append(f"| {arch} | {sum(r['assessment']['rule_pass'] for r in group)}/{len(group)} | "
                      f"{sum(r['assessment']['verdict']=='manual_review' for r in group)} | {mean(r['seconds'] for r in group):.2f} | "
                      f"{mean(r['run_report']['model_calls'] for r in group):.2f} | {mean(r['run_report']['tool_attempts'] for r in group):.2f} | {tokens} |")
+    planning=[r for r in rows if r['id']<=11]
+    if planning:
+        lines+=['','## 仅规划案例（排除澄清与天气问答）','',
+                '| 架构 | 规则通过 | 平均秒（含失败） | 平均模型调用 |','|---|---:|---:|---:|']
+        for arch in ('single','multi'):
+            group=[r for r in planning if r['architecture']==arch]
+            lines.append(f"| {arch} | {sum(r['assessment']['rule_pass'] for r in group)}/{len(group)} | {mean(r['seconds'] for r in group):.2f} | {mean(r['run_report']['model_calls'] for r in group):.2f} |")
     lines+=['','| 案例 | 轮次 | 架构 | 状态 | 规则 | 秒 | 模型 | 工具 | 已上报token |',
             '|---|---:|---|---|---|---:|---:|---:|---:|']
     for r in sorted(rows,key=lambda x:(x['round'],x['id'],x['architecture']=='multi')):
@@ -29,6 +36,8 @@ def render(data):
                      f"{'通过' if r['assessment']['rule_pass'] else '失败'} | {r['seconds']} | {report['model_calls']} | {report['tool_attempts']} | {r.get('reported_tokens') or '未上报'} |")
     lines+=['','## 失败与待复核','']
     for r in rows:
+        if not r['assessment']['rule_pass']:
+            lines.append(f"- 案例{r['id']}第{r['round']}轮{r['architecture']}：{r.get('error_type','rule_failure')}，运行状态{r['run_report']['status']}，模型{r['run_report']['model_calls']}次、工具{r['run_report']['tool_attempts']}次；保留原始失败，不以补跑覆盖。")
         notes=r['assessment']['failures']+r['assessment']['manual_checks']
         if notes:lines.append(f"- {r['architecture']}案例{r['id']}第{r['round']}轮："+'；'.join(notes))
     lines+=['','## 解释边界','',
@@ -36,6 +45,9 @@ def render(data):
             '- 顺序交替减少固定顺序影响，但服务负载和网络波动仍存在；小样本平均耗时仅描述本轮，不是稳定性能承诺。',
             '- token来自供应方回调，不等同账单金额；未独立审计第三方内部调用及回调上报完整性。',
             '- 该结果比较项目中的两种实现，不证明所有单Agent或多Agent系统的普遍优劣。',
+            '- 均值包含失败提前退出及澄清任务；规划子集单列，不能只看更短耗时而忽略失败。',
+            '- 比较的是冻结规划器底座，不包含后续应用层RAG、饮食筛查、HTTP鉴权或数据库开销；这些功能另行验证。',
+            '- 模型标识相同不代表锁定供应方权重及硬件；本机负载和网络波动未做实验室级控制。',
             '- 原始输出及完整源码指纹保存在本地忽略的结果文件。','']
     return '\n'.join(lines)
 

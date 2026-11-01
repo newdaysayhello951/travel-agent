@@ -1,0 +1,17 @@
+{
+  "checked_on":"2026-11-01",
+  "scope":"编程助手查阅来源后整理的复核参照，不是独立人工签字或实时库存证明；票型、优惠和特殊展览必须另核实。",
+  "rules":[
+    {"name":"岳麓书院","aliases":[],"city":"长沙","price":40,"source":"https://ylsy.hnu.edu.cn/wbly/cgdn/zxdp.htm","note":"常规全价参照；实名预约及优惠另核实"},
+    {"name":"橘子洲","aliases":["橘子洲景区","橘子洲风景名胜区"],"city":"长沙","price":0,"source":"https://whhlyt.hunan.gov.cn/whhlyt/news/sxxw/202609/t20260923_34070837.html","note":"基础入园免费，观光交通属于另外的费用"},
+    {"name":"故宫博物院","aliases":["故宫"],"city":"北京","price":40,"months":[11,12,1,2,3],"source":"https://www.dpm.org.cn/Visit.html","note":"淡季成人大门票；额外展馆和人群优惠不混为同一票型"},
+    {"name":"天坛公园","aliases":[],"city":"北京","price":10,"months":[11,12,1,2,3],"source":"https://gygl.beijing.gov.cn/xxgk/xxgk_gyxx/202311/t20231115_3302035.html","note":"2023年官方淡季普通门票参照；公告较旧，2026现价及联票需再确认"},
+    {"name":"中国国家博物馆","aliases":["国家博物馆"],"city":"北京","price":0,"closed_weekdays":[0],"source":"https://pcticket.chnmuseum.cn/museum-en/","note":"预约免费入馆，节假日闭馆例外另确认"},
+    {"name":"老舍故居","aliases":["老舍纪念馆"],"city":"北京","price":0,"closed_weekdays":[0],"source":"https://wwj.beijing.gov.cn/bjww/362679/483700/10844880/index.html","note":"2020年官方免费参观说明，现价需再确认；当前作息可查https://www.bjlsjng.com/ls/index/index.shtml"},
+    {"name":"上海博物馆东馆","aliases":["上海博物馆(东馆)"],"city":"上海","closed_weekdays":[1],"source":"https://www.shanghaimuseum.cn/mu/frontend/pg/m/service/visit-east","note":"东馆常规周二闭馆，国定假日例外；不能套用人民广场馆的闭馆星期"},
+    {"name":"陕西历史博物馆","aliases":[],"city":"西安","price":0,"source":"https://www.sxhm.com/index.html","note":"基础参观免费但须预约；壁画等专题展与基本参观不同"},
+    {"name":"南京博物院","aliases":[],"city":"南京","price":0,"closed_weekdays":[0],"source":"https://www.njmuseum.org.cn/zh/visitIndex","note":"基本陈列免费且全员预约，临时展演不一定免费；节假日作息另确认"},
+    {"name":"洪崖洞","aliases":["洪崖洞民俗风貌区"],"city":"重庆","price":0,"source":"https://www.cqyz.gov.cn/ztzl_229/jwmsxfgygg/t_13112449.html","note":"2023年官方免费入景区说明，不代表内部体验项目免费；当前政策仍应复查"},
+    {"name":"北京(通州)大运河文化旅游景区","aliases":[],"city":"北京","price":0,"source":"https://www.beijing.gov.cn/fuwu/bmfw/sy/jrts/202512/t20251202_4315958.html","note":"2025年政府说明为免费开放，当前特殊活动另核实"}
+  ]
+}
