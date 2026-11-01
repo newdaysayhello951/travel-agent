@@ -42,6 +42,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             result=await model_reliability(20).awrap_model_call(request,handler)
             changed=handler.call_args.args[0]
             self.assertEqual(changed.tools,[])
+            self.assertEqual(changed.model_settings['tool_choice'],'none')
             self.assertIn('Original rules',changed.system_message.content)
             self.assertNotEqual(request.tools,[])
             self.assertEqual(result,'done')
@@ -73,6 +74,21 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(model_handler.call_args.args[0].tools,[])
             self.assertEqual(current_budget.get().attempts,24)
         finally:current_budget.reset(token)
+
+    async def test_noncompliant_model_cannot_restart_tool_loop(self):
+        from unittest.mock import patch
+        from reliability import ExecutionLimitError
+        async def weather(city: str) -> str:return 'fixture forecast'
+        tool=StructuredTool.from_function(coroutine=weather,name='maps_weather',description='Test weather')
+        model=ScriptedModel(responses=[AIMessage(content='',tool_calls=[{'name':'maps_weather','args':{'city':'110000'},'id':str(i)}]) for i in range(5)])
+        planner=TripPlanner(model);planner.mcp=SimpleNamespace(get_tools_for=AsyncMock(side_effect=[[tool],[],[]]))
+        report=RunReport()
+        with patch('agents.planner.CONFIG.max_tool_calls',1):
+            with self.assertRaises(ExecutionLimitError) as caught:
+                await planner.invoke('fixture',request=TripRequest(city='长沙',start_date='2026-11-10',end_date='2026-11-10',stay_on_last_day=True),report=report)
+        self.assertIn('收尾阶段',str(caught.exception))
+        self.assertEqual(report.tool_attempts,1)
+        self.assertEqual(report.model_calls,2)
 
     async def test_retry_cache_message_ids_and_model_count_in_real_graph(self):
         attempts=0

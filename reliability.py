@@ -64,16 +64,21 @@ def model_reliability(max_calls, max_tool_calls=24):
     @wrap_model_call
     async def guarded_model(request, handler):
         budget = current_budget.get()
+        closing = False
         if budget and (budget.cache_hits >= 3 or budget.model_calls >= max(1,max_calls-2)
                        or budget.attempts >= max(1,max_tool_calls-4)):
             budget.finalization_forced = True
+            closing = True
             original = request.system_message.content if request.system_message else ''
             if not isinstance(original,str):
                 original=json.dumps(original,ensure_ascii=False)
-            request=request.override(tools=[],tool_choice=None,
+            request=request.override(tools=[],tool_choice=None,model_settings={**request.model_settings,'tool_choice':'none'},
                 system_message=SystemMessage(content=original+'\n查询阶段已经结束，不再调用工具。按用户原始任务输出最终结果：只查天气则简洁回答天气，规划任务则输出行程JSON；未知天气留空，缺失路线标为待确认。严禁编造查询事实。信息根本不足时明确说明。'))
         reserve_model_call(max_calls)
-        return await handler(request)
+        response = await handler(request)
+        if closing and any(getattr(message,'tool_calls',[]) for message in getattr(response,'result',[])):
+            raise ExecutionLimitError('模型在收尾阶段仍返回工具调用，已停止继续请求')
+        return response
     return guarded_model
 
 

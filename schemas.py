@@ -45,7 +45,7 @@ class Hotel(PlanItem):
 
 
 class Meal(PlanItem):
-    type: str
+    type: Literal['breakfast','lunch','dinner']
     estimated_cost: Money
 
 
@@ -55,7 +55,7 @@ class DayPlan(BaseModel):
     day_index: int = Field(ge=0)
     hotel: Hotel | None
     attractions: list[Attraction]
-    meals: list[Meal]
+    meals: list[Meal] = Field(min_length=3,max_length=3)
     transportation_mode: Literal['public_transit','walking','driving','cycling','mixed'] | None = None
 
 
@@ -112,16 +112,32 @@ def recalculate_budget(text):
     """只重算冗余汇总字段，不修改每日报价；所有改动显式返回。"""
     try:
         data = decode_plan_json(text)
-        plan = TripPlan.model_validate(data)
     except (ValueError, TypeError):
         return text, []
+    changes = []
+    meal_types={'breakfast':'breakfast','早餐':'breakfast','早饭':'breakfast',
+                'lunch':'lunch','午餐':'lunch','午饭':'lunch',
+                'dinner':'dinner','晚餐':'dinner','晚饭':'dinner'}
+    if isinstance(data,dict) and isinstance(data.get('days'),list):
+        for i, day in enumerate(data['days']):
+            if not isinstance(day,dict) or not isinstance(day.get('meals'),list):
+                continue
+            for j, meal in enumerate(day['meals']):
+                if isinstance(meal,dict) and isinstance(meal.get('type'),str):
+                    before=meal['type']; canonical=meal_types.get(before.strip().lower())
+                    if canonical and canonical != before:
+                        meal['type']=canonical
+                        changes.append({'path':f'days.{i}.meals.{j}.type','before':before,'after':canonical,'reason':'餐别的明确同义表示标准化'})
+    try:
+        plan = TripPlan.model_validate(data)
+    except (ValueError,TypeError):
+        return json.dumps(data,ensure_ascii=False), changes
     sums = {
         'total_attractions': round(sum(a.ticket_price for d in plan.days for a in d.attractions),2),
         'total_hotels': round(sum(d.hotel.estimated_cost for d in plan.days if d.hotel),2),
         'total_meals': round(sum(m.estimated_cost for d in plan.days for m in d.meals),2),
     }
     sums['total'] = round(sum(sums.values()) + plan.budget.total_transportation,2)
-    changes = []
     modes={'public_transit':'public_transit','walking':'walking','driving':'driving','cycling':'cycling',
            '公共交通':'public_transit','公交':'public_transit','地铁':'public_transit','公交+步行':'public_transit',
            '步行+公交':'public_transit','地铁+步行':'public_transit','步行+地铁':'public_transit','公交+地铁':'public_transit',
@@ -209,7 +225,8 @@ def validate_plan_text(text: str, request: TripRequest | None = None) -> dict | 
         if day.day_index != i:
             errors.append(issue(f'days.{i}.day_index', 'day_index', f'应为{i}'))
         if sorted(m.type for m in day.meals) != ['breakfast', 'dinner', 'lunch']:
-            errors.append(issue(f'days.{i}.meals', 'meal_coverage', '必须且只能包含早中晚三餐各一次'))
+            actual=','.join(m.type for m in day.meals)
+            errors.append(issue(f'days.{i}.meals', 'meal_coverage', f'必须且只能包含早中晚三餐各一次，实际餐别为{actual}'))
     b = plan.budget
     totals = {
         'total_attractions': sum(a.ticket_price for d in plan.days for a in d.attractions),

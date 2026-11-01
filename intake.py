@@ -11,9 +11,9 @@ class IntakeDecision(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     budget_limit: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    conflict: bool = False
-    stay_on_last_day: bool = False
-    message: str = Field(default='', max_length=1500)
+    conflict: bool | None = False
+    stay_on_last_day: bool | None = False
+    message: str | None = Field(default='', max_length=1500)
 
 
 def clarification(decision: IntakeDecision, query: str):
