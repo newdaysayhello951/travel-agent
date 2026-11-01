@@ -5,7 +5,7 @@
 ## 当前架构
 
 ```text
-Streamlit / 持久化CLI → TravelService → TripPlanner（单Agent）→ 模型网关 / DashScope
+Streamlit / FastAPI / 持久化CLI → TravelService → TripPlanner（单Agent）→ 模型网关 / DashScope
                          │                  │
                          ↓                  ↓
                   SQLAlchemy / SQLite   高德 MCP 工具
@@ -46,6 +46,10 @@ Copy-Item .env.example .env
 旧多 Agent 实现保存在 Git 提交 `5ca1796`，可用该版本复现对比；原架构说明见 `docs/原多智能体架构.md`，仅作为历史资料。对比应保持模型、案例和配置一致，且重复运行，不能从单次结果断言性能优势。
 
 当前相同底座的实验多Agent见`agents/multi.py`；完整配对结果见[单多智能体对照结果](docs/单多智能体对照结果.md)。两者本轮各7/7规则通过，默认保留编排更简单的单Agent，不宣称普遍架构优劣。
+
+后续已扩大到15例×2架构×2轮：[60次扩展对照](docs/扩展单多智能体对照结果.md)，单Agent30/30、多Agent28/30规则通过，仍保留单Agent默认。[来源核查记录](docs/扩展评估来源核查.md)单独列出语义问题和未证实事实，不把规则通过当作旅行全部正确。
+
+可选浏览器回归依赖安装`requirements-test.txt`，使用`evals/browser_e2e.py`连接隔离的本机测试服务；默认prepare只检查登录与输入，full可能真实调用模型。测试账号文件、数据库和截图仅放`.work`，不得提交或指向个人浏览器配置。
 
 ## 历史会话与继续修改
 
