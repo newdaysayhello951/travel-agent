@@ -99,6 +99,8 @@ class Config:
     max_tool_calls: int = field(default_factory=lambda: int(os.getenv('MAX_TOOL_CALLS', '24')))
     run_timeout: float = field(default_factory=lambda: float(os.getenv('RUN_TIMEOUT', '180')))
     recursion_limit: int = field(default_factory=lambda: int(os.getenv('RECURSION_LIMIT', '40')))
+    max_model_calls: int = field(default_factory=lambda: int(os.getenv('MAX_MODEL_CALLS', '20')))
+    plan_repairs: int = field(default_factory=lambda: int(os.getenv('PLAN_REPAIRS', '1')))
 
     # ---------- [适配2] MCP 连接 ----------
     mcp_transport: str = "http"
@@ -153,6 +155,8 @@ class Config:
 
     # 自动检查初始化
     def __post_init__(self):
+        if not (1 <= self.max_model_calls <= 100 and 0 <= self.plan_repairs <= 2):
+            raise ValueError('模型调用上限须为1至100，行程修正次数须为0至2')
         if not (0 < self.tool_timeout <= 120 and 0 < self.run_timeout <= 900):
             raise ValueError('工具超时须在(0,120]秒，总超时须在(0,900]秒')
         if not (0 <= self.tool_retries <= 3 and 1 <= self.max_tool_calls <= 100 and 2 <= self.recursion_limit <= 200):
@@ -223,6 +227,7 @@ class Config:
             temperature=self.temperature,
             streaming=streaming,
             extra_body=extra_body or None,
+            max_retries=0,  # 由上层预算管理，避免隐藏的SDK重试增加费用
         )
 
 

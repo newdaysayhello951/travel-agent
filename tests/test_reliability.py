@@ -96,8 +96,9 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
             yield {'event':'on_chat_model_stream','data':{'chunk':SimpleNamespace(content=json.dumps({'city':'长沙','days':[]}))}}
         planner=TripPlanner(object())
         planner._agent=SimpleNamespace(astream_events=invalid)
-        with self.assertRaises(PlanValidationError):
-            async for _ in planner.stream('test'):pass
+        with patch('agents.planner.CONFIG.plan_repairs',0):
+            with self.assertRaises(PlanValidationError):
+                async for _ in planner.stream('test'):pass
         self.assertIsNotNone(current_budget.get())
         async def recurse(*args, **kwargs):raise GraphRecursionError('limit')
         planner._agent=SimpleNamespace(ainvoke=recurse)

@@ -36,7 +36,7 @@ class PlannerTests(unittest.IsolatedAsyncioTestCase):
                 yield {'event':'on_chat_model_stream', 'data':{'chunk':SimpleNamespace(content=text)}}
         planner = TripPlanner(object())
         planner._agent = SimpleNamespace(astream_events=events)
-        with patch('agents.planner.validate_plan_text'):
+        with patch('agents.planner.validate_plan_text', return_value=None):
             result = ''.join([chunk async for chunk in planner.stream('test')])
         self.assertIn('New York', result)
         self.assertIn('查询天气', result)

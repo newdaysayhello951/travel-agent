@@ -221,7 +221,7 @@ def format_plan_cli(json_text: str) -> str | None:
         lines.append(f"📅 Day {idx}  {d}  {desc}")
         lines.append("━" * 60)
 
-        hotel = day.get("hotel", {})
+        hotel = (day.get("hotel") or {})
         if hotel.get("name"):
             lines.append(
                 f"  🏨 {hotel['name']}  ★{hotel.get('rating', '')}  "

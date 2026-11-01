@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 import hashlib
+from dataclasses import asdict
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,6 +22,8 @@ async def main():
     from agents.planner import TripPlanner
     from render import parse_plan
     from langchain_core.callbacks import AsyncCallbackHandler
+    from reliability import RunReport
+    from schemas import PlanValidationError, TripRequest
 
     class Metrics(AsyncCallbackHandler):
         def __init__(self):
@@ -48,22 +51,19 @@ async def main():
         planner = TripPlanner(llm)
         start = time.perf_counter()
         row = dict(case)
+        report = RunReport()
         try:
-            await asyncio.wait_for(planner.build(), args.timeout)
-            planner._agent = planner._agent.with_config(callbacks=[metrics])
-            text = await asyncio.wait_for(planner.invoke(case['query']), args.timeout)
-            row.update(output=text, parsed_plan=bool(parse_plan(text)), status='completed')
+            request = TripRequest.model_validate(case['request']) if case.get('request') else None
+            text = await asyncio.wait_for(planner.invoke(case['query'], request=request, report=report, callbacks=[metrics]), args.timeout)
+            row.update(output=text, parsed_plan=bool(parse_plan(text)), status=report.status)
         except Exception as exc:
             row.update(status='failed', error_type=type(exc).__name__)
-            from pydantic import ValidationError
-            if isinstance(exc.__cause__, ValidationError):
-                row['validation_errors'] = [
-                    {'location':e['loc'], 'type':e['type'], 'message':e['msg']}
-                    for e in exc.__cause__.errors(include_input=False, include_context=False, include_url=False)
-                ]
+            if isinstance(exc, PlanValidationError):
+                row['validation_errors'] = exc.issues
         finally:
             await planner.mcp.close()
         row.update(seconds=round(time.perf_counter()-start, 2), model_calls=metrics.calls or None, reported_tokens=metrics.tokens or None)
+        row['run_report'] = asdict(report)
         rows.append(row)
         path = ROOT / args.output
         path.parent.mkdir(parents=True, exist_ok=True)

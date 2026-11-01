@@ -12,7 +12,9 @@ from config import CONFIG
 from agents.planner import TripPlanner
 from render import format_plan_cli
 from schemas import PlanValidationError
-from reliability import ExecutionLimitError
+from reliability import ExecutionLimitError, RunReport, PlanningServiceError
+from dataclasses import asdict
+import json
 
 
 # 不传参数时使用的默认示例
@@ -24,14 +26,14 @@ DEFAULT_INPUT = (
 
 # ==================== 演示 ====================
 
-async def demo_stream(planner: TripPlanner, user_input: str):
+async def demo_stream(planner: TripPlanner, user_input: str, report: RunReport):
     """流式输出演示 —— 实时打印 token，结束后渲染格式化计划"""
     print("=" * 60)
     print(f"🚀 正在为您规划旅行...\n输入: {user_input}\n")
     print("=" * 60)
 
     buffer = ""
-    async for token in planner.stream(user_input):
+    async for token in planner.stream(user_input, report=report):
         print(token, end="", flush=True)
         buffer += token
 
@@ -44,13 +46,13 @@ async def demo_stream(planner: TripPlanner, user_input: str):
     print("✅ 旅行计划生成完毕")
 
 
-async def demo_invoke(planner: TripPlanner, user_input: str):
+async def demo_invoke(planner: TripPlanner, user_input: str, report: RunReport):
     """非流式输出演示"""
     print("=" * 60)
     print(f"🚀 正在为您规划旅行...\n输入: {user_input}\n")
     print("=" * 60)
 
-    result = await planner.invoke(user_input)
+    result = await planner.invoke(user_input, report=report)
     formatted = format_plan_cli(result)
     if formatted:
         print(formatted)
@@ -80,15 +82,20 @@ async def main():
     llm = CONFIG.create_llm()
     planner = TripPlanner(llm)
 
-    if args.no_stream:
-        await demo_invoke(planner, args.query)
-    else:
-        await demo_stream(planner, args.query)
+    report = RunReport()
+    try:
+        if args.no_stream:
+            await demo_invoke(planner, args.query, report)
+        else:
+            await demo_stream(planner, args.query, report)
+    finally:
+        print(json.dumps(asdict(report), ensure_ascii=False))
+        await planner.mcp.close()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except (PlanValidationError, ExecutionLimitError, TimeoutError) as exc:
+    except (PlanValidationError, ExecutionLimitError, TimeoutError, PlanningServiceError) as exc:
         print(f"规划失败：{exc or '执行超时，请缩小规划范围后重试'}")
         raise SystemExit(1)

@@ -188,7 +188,8 @@ if submit_btn:
     else:
         planner = get_planner()
         from schemas import TripRequest, PlanValidationError
-        from reliability import ExecutionLimitError
+        from reliability import ExecutionLimitError, RunReport, PlanningServiceError
+        from dataclasses import asdict
         if (end_date - start_date).days > 30:
             st.error("单次最多规划31天，请缩短日期范围。")
             st.stop()
@@ -204,27 +205,36 @@ if submit_btn:
 
             stream_placeholder = st.empty()
             status_placeholder = st.empty()
+            report = RunReport()
 
             async def _collect():
                 results = []
-                async for token in planner.stream(prompt, request=request):
+                async for token in planner.stream(prompt, request=request, report=report):
                     results.append(token)
+                    if token.startswith('\n') and token.endswith('...\n'):
+                        status_placeholder.markdown(token.strip())
                 return results
 
             try:
                 tokens = asyncio.run(_collect())
-            except (PlanValidationError, ExecutionLimitError, TimeoutError):
-                st.error("规划未通过校验或执行超时/超限，请缩小需求后重试。")
+            except (PlanValidationError, ExecutionLimitError, TimeoutError, PlanningServiceError) as exc:
+                st.session_state.plan_data = None
+                st.session_state.plan_raw = ''
+                st.session_state.run_report = asdict(report)
+                st.error(str(exc) or "执行超时，请缩小需求后重试。")
+                st.json(asdict(report))
                 st.stop()
+            st.session_state.run_report = asdict(report)
 
             # 分离状态行和内容
             full_text = ""
             status_lines = []
             for token in tokens:
-                full_text += token
                 stripped = token.strip()
-                if any(stripped.startswith(emoji) for emoji in ["🌤️", "🏨", "🏛️", "🚶", "🚗", "🚌", "🔎", "📍", "🚲", "🔧"]):
+                if token.startswith('\n') and token.endswith('...\n'):
                     status_lines.append(stripped)
+                else:
+                    full_text += token
 
             # 显示状态
             if status_lines:
@@ -242,6 +252,9 @@ if submit_btn:
 
 
 # ============ 结果展示 ============
+if st.session_state.get('run_report'):
+    with st.expander('本次执行与校验记录', expanded=False):
+        st.json(st.session_state.run_report)
 plan = st.session_state.plan_data
 if plan is not None:
     # 显示状态
@@ -297,7 +310,7 @@ if plan is not None:
                 st.markdown(f'<div class="day-header">📅 {d}  {desc}</div>', unsafe_allow_html=True)
 
                 # 住宿
-                hotel = day.get("hotel", {})
+                hotel = (day.get("hotel") or {})
                 if hotel.get("name"):
                     st.markdown(
                         f"🏨 **{hotel['name']}**  ★{hotel.get('rating', '-')}  "
@@ -384,7 +397,7 @@ if plan is not None:
         for day in p.get("days", []):
             idx = day.get("day_index", 0) + 1
             md += f"### Day {idx} — {day.get('date', '')[-5:]}  {day.get('description', '')}\n\n"
-            h = day.get("hotel", {})
+            h = (day.get("hotel") or {})
             if h.get("name"):
                 md += f"- **住宿:** {h['name']}  ★{h.get('rating', '')}  ¥{h.get('estimated_cost', 0)}/晚  |  {h.get('address', '')}\n"
             md += f"- **交通:** {day.get('transportation', '')}\n"
