@@ -45,15 +45,17 @@ class McpClientManager:
     async def _get_client(self) -> MultiServerMCPClient:
         """懒加载 MCP 客户端"""
         if self._client is None:
-            self._client = MultiServerMCPClient({
-                "amap-server": {
-                    "transport": CONFIG.mcp_transport,
-                    "url": CONFIG.mcp_url,
-                    "headers": {
-                        "Authorization": f"Bearer {CONFIG.api_key}"
-                    }
-                }
-            })
+            server_cfg: dict = {
+                "transport": CONFIG.mcp_transport,
+                "url": CONFIG.mcp_url,
+            }
+            # [适配3] 不同服务商的鉴权方式不同：
+            #   阿里百炼托管版 → Authorization: Bearer <DASHSCOPE_API_KEY>
+            #   高德官方版     → key 已在 URL 查询串里，不需要额外请求头
+            headers = CONFIG.mcp_headers()
+            if headers:
+                server_cfg["headers"] = headers
+            self._client = MultiServerMCPClient({"amap-server": server_cfg})
         return self._client
 
     # ==================== 工具获取 ====================
@@ -68,10 +70,37 @@ class McpClientManager:
         return self._tools_cache["all"]
 
     async def get_tools_for(self, domain: str) -> list[BaseTool]:
-        """按领域获取工具子集"""
+        """按领域获取工具子集。
+
+        先按 config 里的精确名字匹配；一个都没匹配到时，
+        再用 tool_domain_prefixes 做前缀兜底 —— 不同 MCP 服务商的命名有差异。
+        """
         all_tools = await self.get_all_tools()
+
         target_names = set(CONFIG.tool_domains.get(domain, []))
-        return [t for t in all_tools if t.name in target_names]
+        matched = [t for t in all_tools if t.name in target_names]
+        if matched:
+            return matched
+
+        # [适配5] 精确匹配失败 → 前缀兜底
+        prefixes = tuple(CONFIG.tool_domain_prefixes.get(domain, []))
+        if prefixes:
+            matched = [t for t in all_tools if t.name.startswith(prefixes)]
+        if matched:
+            print(
+                f"[MCP] 领域 {domain!r} 未命中精确名字，前缀兜底匹配到: "
+                f"{[t.name for t in matched]}"
+            )
+            return matched
+
+        # 一个都没匹配到 → 明确报出来，
+        # 避免出现「子 Agent 手里没有任何工具」这种静默故障
+        available = ", ".join(sorted(t.name for t in all_tools))
+        print(
+            f"[MCP] 警告: 领域 {domain!r} 没有匹配到任何工具！"
+            f"服务端实际提供: {available or '(空)'}"
+        )
+        return []
 
     # ==================== 生命周期 ====================
 

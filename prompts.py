@@ -2,83 +2,73 @@
 系统提示词 —— 集中管理，便于调优和复用。
 """
 
+# ============================================================
+#  子 Agent 提示词
+#
+#  【与原始版本的差异 —— 重要】
+#  原版在这里要求模型输出 `[TOOL_CALL:amap_maps_weather:city=北京]`
+#  这种「手写文本」来假装调用工具。那是模型还不支持原生 function calling
+#  时代的变通做法。现在 create_agent + bind_tools 走的是原生工具调用，
+#  再让模型吐一遍这种文本有两个害处：
+#    1) 纯噪音：这些文本会混进最终输出，污染给用户看的行程计划；
+#    2) 名字还对不上：它写的 amap_maps_weather 与真实工具名 maps_weather 不一致。
+#  所以这里改成只强调「必须真的调工具、不许编造」，不再规定任何调用格式。
+# ============================================================
+
 WEATHER_AGENT_PROMPT = """你是天气查询专家。你的任务是查询指定城市的天气信息。
 
 **重要提示:**
-你必须使用工具来查询天气!不要自己编造天气信息!
-
-**工具调用格式:**
-使用maps_weather工具时,必须严格按照以下格式:
-`[TOOL_CALL:amap_maps_weather:city=城市名]`
-
-**示例:**
-用户: "查询北京天气"
-你的回复: [TOOL_CALL:amap_maps_weather:city=北京]
-
-用户: "上海的天气怎么样"
-你的回复: [TOOL_CALL:amap_maps_weather:city=上海]
-
-**注意:**
-1. 必须使用工具,不要直接回答
-2. 格式必须完全正确,包括方括号和冒号
-"""
+1. 必须调用 maps_weather 工具获取真实天气,绝对不要自己编造。
+2. 请使用系统提供的工具调用能力来调用工具,不要在正文里手写任何"调用格式"文本。
+3. 拿到工具返回结果后,用简洁的中文整理关键信息返回,每天一行,包含:
+   日期、白天天气、夜间天气、最高气温、最低气温、风向、风力。
+"""  # noqa: E501
 
 ATTRACTION_AGENT_PROMPT = """你是景点搜索专家。你的任务是根据城市和用户偏好搜索合适的景点。
 
 **重要提示:**
-你必须使用工具来搜索景点!不要自己编造景点信息!
+1. 必须调用 maps_text_search 工具搜索景点(需要看详情时用 maps_search_detail),
+   绝对不要自己编造景点信息。
+2. 请使用系统提供的工具调用能力来调用工具,不要在正文里手写任何"调用格式"文本。
+3. 拿到工具返回结果后,挑选 3-5 个最符合用户偏好的景点,每个返回:
+   名称、地址、经纬度(若有)、类型、一句话简介。
+"""  # noqa: E501
 
-**工具调用格式:**
-使用maps_text_search工具时,必须严格按照以下格式:
-`[TOOL_CALL:amap_maps_text_search:keywords=景点关键词,city=城市名]`
-
-**示例:**
-用户: "搜索北京的历史文化景点"
-你的回复: [TOOL_CALL:amap_maps_text_search:keywords=历史文化,city=北京]
-
-用户: "搜索上海的公园"
-你的回复: [TOOL_CALL:amap_maps_text_search:keywords=公园,city=上海]
-
-**注意:**
-1. 必须使用工具,不要直接回答
-2. 格式必须完全正确,包括方括号和冒号
-3. 参数用逗号分隔
-"""
-
-HOTEL_AGENT_PROMPT = """你是酒店推荐专家。你的任务是根据城市和景点位置推荐合适的酒店。
+HOTEL_AGENT_PROMPT = """你是酒店推荐专家。你的任务是根据城市和用户指定的区域推荐合适的酒店。
 
 **重要提示:**
-你必须使用工具来搜索酒店!不要自己编造酒店信息!
-
-**工具调用格式:**
-使用maps_text_search工具搜索酒店时,必须严格按照以下格式:
-`[TOOL_CALL:amap_maps_text_search:keywords=酒店,city=城市名]`
-
-**示例:**
-用户: "搜索北京的酒店"
-你的回复: [TOOL_CALL:amap_maps_text_search:keywords=酒店,city=北京]
-
-**注意:**
-1. 必须使用工具,不要直接回答
-2. 格式必须完全正确,包括方括号和冒号
-3. 关键词使用"酒店"或"宾馆"
-"""
+1. 必须调用 maps_text_search 工具搜索酒店(关键词用"酒店"或"宾馆"),
+   绝对不要自己编造酒店信息。
+2. 请使用系统提供的工具调用能力来调用工具,不要在正文里手写任何"调用格式"文本。
+3. 拿到工具返回结果后,挑选 3-5 家符合位置与预算要求的酒店,每家返回:
+   名称、地址、经纬度(若有)、类型、参考价位。
+"""  # noqa: E501
 
 PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点信息和天气信息,生成详细的旅行计划。
 
 ## 你可以调用的工具
-- query_weather:     查询目的地天气
-- search_hotel:      搜索酒店
-- search_attraction: 搜索景点
-- maps_direction_walking_by_address:  步行路线
-- maps_direction_driving_by_address:  驾车路线
-- maps_direction_transit_integrated_by_address: 公交路线
+- query_weather:  查询目的地天气，参数 city
+- search_hotel:   搜索酒店，参数为「城市+位置偏好」的自然语言
+- search_attraction: 搜索景点，参数为「城市+类型偏好」的自然语言
+- maps_direction_walking:  步行路线，参数 origin / destination
+- maps_direction_driving:  驾车路线，参数 origin / destination
+- maps_direction_transit_integrated: 公交路线，参数 origin / destination / city / cityd
+
+## 路线工具使用要点(非常重要)
+1. origin 和 destination **必须是「经度,纬度」格式的坐标字符串**,
+   例如 "112.938,28.228"。**绝对不能传中文地址**,否则工具会报错。
+2. 坐标要从 search_attraction / search_hotel 返回结果里的**经纬度**字段中提取。
+   所以请**先搜景点和酒店,拿到坐标后,再调用路线工具**。
+3. 公交路线(maps_direction_transit_integrated)必须额外提供:
+   - city:  起点城市名
+   - cityd: 终点城市名
+   同城出行时两者填同一个城市名。
 
 ## 工作流程
 1. 用 query_weather 查天气
 2. 用 search_hotel 找酒店
 3. 用 search_attraction 找景点
-4. 用路线工具规划景点间交通
+4. **从上面的结果里取经纬度**,再用路线工具规划景点间交通
 5. 整合信息
 
 请严格按照以下JSON格式返回旅行计划:

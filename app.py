@@ -48,7 +48,8 @@ def get_planner():
     from config import CONFIG
     from agents.planner import TripPlanner
     llm = CONFIG.create_llm()
-    return TripPlanner(llm)
+    # [适配4] 子 Agent 用非流式 LLM，避免它们的中间 token 混进 Planner 的输出流
+    return TripPlanner(llm, CONFIG.create_llm(streaming=False))
 
 
 # ---- 辅助: 构建 prompt ----
@@ -61,7 +62,9 @@ def build_prompt(
     preferences: list[str],
     extra: str,
 ) -> str:
-    days = (end_date - start_date).days
+    # 含头含尾计算天数：5/21~5/23 是 3 天而不是 2 天
+    # （原代码用 (end - start).days，得到的是"间隔"，会少算一天）
+    days = (end_date - start_date).days + 1
     parts = [
         f"{city}{days}日游",
         f"{start_date.strftime('%Y年%m月%d日')}-{end_date.strftime('%Y年%m月%d日')}",
@@ -112,7 +115,8 @@ with st.sidebar:
         end_date = st.date_input("📅 结束日期", value=date.today())
 
     if start_date and end_date and end_date >= start_date:
-        trip_days = (end_date - start_date).days
+        # 含头含尾：与 build_prompt 保持一致
+        trip_days = (end_date - start_date).days + 1
         st.info(f"📌 共计 **{trip_days}** 天")
     elif end_date < start_date:
         st.error("结束日期不能早于开始日期")
@@ -410,3 +414,14 @@ if plan is not None:
         mime="text/markdown",
         use_container_width=True,
     )
+
+elif st.session_state.get("plan_raw"):
+    # 兜底：模型返回了内容但没能解析成结构化行程时，
+    # 至少把原始输出摆出来，而不是让用户面对一片空白。
+    st.error("⚠️ 未能从模型输出中解析出结构化行程。以下是原始输出，可据此人工整理：")
+    if st.session_state.get("status_lines"):
+        with st.expander("🔍 规划过程", expanded=False):
+            st.markdown("\n".join(st.session_state.status_lines))
+    with st.expander("📄 原始输出", expanded=True):
+        st.code(st.session_state.plan_raw, language="json")
+

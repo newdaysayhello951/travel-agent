@@ -2,13 +2,22 @@
 智能旅行助手 —— 入口。
 
 用法:
-    python Agent.py                # 流式输出（默认）
-    python Agent.py --no-stream    # 非流式输出
+    python Agent.py                                  # 用内置示例需求，流式输出
+    python Agent.py "成都3日游，2026年6月1日-6月3日"    # 自定义需求
+    python Agent.py --no-stream "成都3日游"           # 非流式输出
 """
+import argparse
 import asyncio
 from config import CONFIG
 from agents.planner import TripPlanner
 from render import format_plan_cli
+
+
+# 不传参数时使用的默认示例
+DEFAULT_INPUT = (
+    "长沙3日游，2026年5月21日-2026年5月23日，"
+    "喜欢自然风光和历史文化，中等预算，住五一广场"
+)
 
 
 # ==================== 演示 ====================
@@ -50,14 +59,31 @@ async def demo_invoke(planner: TripPlanner, user_input: str):
     print("✅ 旅行计划生成完毕")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="智能旅行助手 CLI")
+    parser.add_argument(
+        "query", nargs="?", default=DEFAULT_INPUT,
+        help="旅行需求（自然语言）。不传则用内置示例。",
+    )
+    parser.add_argument(
+        "--no-stream", action="store_true",
+        help="关闭流式输出（一次性返回完整结果）",
+    )
+    return parser.parse_args()
+
+
 async def main():
+    args = parse_args()
+
     llm = CONFIG.create_llm()
-    planner = TripPlanner(llm)
+    # [适配4] 子 Agent 用非流式 LLM：它们只被当作「黑盒工具」整体调用，
+    # 中间 token 无需暴露，否则会混进 Planner 的输出流里。
+    planner = TripPlanner(llm, CONFIG.create_llm(streaming=False))
 
-    user_input = "长沙3日游，2026年5月21日-2026年5月23日，喜欢自然风光和历史文化，中等预算，住五一广场"
-
-    # await demo_invoke(planner, user_input)
-    await demo_stream(planner, user_input)
+    if args.no_stream:
+        await demo_invoke(planner, args.query)
+    else:
+        await demo_stream(planner, args.query)
 
 
 if __name__ == "__main__":

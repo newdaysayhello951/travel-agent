@@ -1,0 +1,22 @@
+# ---- 密钥 ----
+.env
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+.pip-cache/
+
+# ---- 本机沙箱临时目录（仅本机环境需要）----
+.tmp/
+.work/
+.probe*/
+.p1/
+.p2/
+.tools/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
