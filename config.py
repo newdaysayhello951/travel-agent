@@ -190,20 +190,7 @@ class Config:
 
     # 创建模型实例对象
     def create_llm(self, streaming: bool = True):
-        """工厂方法：按提供方创建 LLM 实例。
-
-        [适配4] 增加 streaming 参数，用于区分两类调用者：
-
-          - 总控 Planner：streaming=True
-            逐 token 流式产出，用户能实时看到进度。
-
-          - 子 Agent（Hotel/Attraction/Weather）：streaming=False
-            它们只会被 Planner 当作「黑盒工具」整体调用（ainvoke），
-            内部的中间 token 没人要看。若也开成 True，
-            LangChain 会把子 Agent 的 token 事件一并上报给
-            Planner 的 astream_events，导致子 Agent 的原始输出
-            混进主输出流里。
-        """
+        """按提供方创建模型，页面使用流式，评估可使用非流式。"""
         if self.llm_provider == PROVIDER_DASHSCOPE:
             return ChatTongyi(
                 model=self.dashscope_model,

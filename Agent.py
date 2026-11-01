@@ -76,9 +76,7 @@ async def main():
     args = parse_args()
 
     llm = CONFIG.create_llm()
-    # [适配4] 子 Agent 用非流式 LLM：它们只被当作「黑盒工具」整体调用，
-    # 中间 token 无需暴露，否则会混进 Planner 的输出流里。
-    planner = TripPlanner(llm, CONFIG.create_llm(streaming=False))
+    planner = TripPlanner(llm)
 
     if args.no_stream:
         await demo_invoke(planner, args.query)

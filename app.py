@@ -48,8 +48,7 @@ def get_planner():
     from config import CONFIG
     from agents.planner import TripPlanner
     llm = CONFIG.create_llm()
-    # [适配4] 子 Agent 用非流式 LLM，避免它们的中间 token 混进 Planner 的输出流
-    return TripPlanner(llm, CONFIG.create_llm(streaming=False))
+    return TripPlanner(llm)
 
 
 # ---- 辅助: 构建 prompt ----
