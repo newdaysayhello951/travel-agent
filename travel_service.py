@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import re
+import inspect
 
 from reliability import RunReport
 from schemas import TripRequest,PlanValidationError,issue,validate_plan_text
@@ -26,11 +27,15 @@ class TravelService:
         if len(prompt)>60000:raise ValueError('需求和参考资料过长，请缩短范围')
         return prompt,references
 
-    def _enrich(self,plan,references,preferences=None):
+    def _enrich(self,plan,references,preferences=None,require_citations=False):
         from fact_checks import check_plan
-        used=set(re.findall(r'\[(K[0-9a-f]{12}_\d+_[0-9a-f]{8})\]',json.dumps(plan,ensure_ascii=False)))
+        visible={k:v for k,v in plan.items() if k not in ('knowledge_references','cited_sources','fact_check','preference_checks')}
+        used=set(re.findall(r'\[(K[0-9a-f]{12}_\d+_[0-9a-f]{8})\]',json.dumps(visible,ensure_ascii=False)))
         known={r['id'] for r in references}
         if used-known:raise PlanValidationError([issue('cited_sources','unknown_citation','引用了本次未提供的资料，请更新或移除过期引用')])
+        if require_citations and references and not used:
+            available='；'.join(f"[{r['id']}]={r['title']}" for r in references)
+            raise PlanValidationError([issue('overall_suggestions','missing_citation','用户要求来源引用。请在总体建议中明确采用以下真实标记（不能写[资料ID]占位符）：'+available+'。仅引用支持实际内容的资料，不改其他事实。')])
         plan['knowledge_references']=references
         plan['cited_sources']=[r for r in references if r['id'] in used]
         plan['fact_check']=check_plan(plan,self.knowledge.facts(plan['city']))
@@ -43,11 +48,13 @@ class TravelService:
         if plan['fact_check']['errors']:raise PlanValidationError(plan['fact_check']['errors'])
         return plan
 
-    async def _generate(self,prompt,request,report,on_progress):
+    async def _generate(self,prompt,request,report,on_progress,validation=None):
+        method=self.planner.invoke if on_progress is None else self.planner.stream
+        options={'validators':(validation,)} if validation and 'validators' in inspect.signature(method).parameters else {}
         if on_progress is None:
-            return await self.planner.invoke(prompt,request=request,report=report)
+            return await self.planner.invoke(prompt,request=request,report=report,**options)
         body=[]
-        async for chunk in self.planner.stream(prompt,request=request,report=report):
+        async for chunk in self.planner.stream(prompt,request=request,report=report,**options):
             result=on_progress(chunk)
             if asyncio.iscoroutine(result):await result
             if report.status in ('valid_plan','text'):body.append(chunk)
@@ -77,9 +84,11 @@ class TravelService:
         preferences=update_preferences(query)
         try:
             prompt,references=self._context(query,request,preferences)
-            text=await self._generate(prompt,request,report,on_progress)
+            required='引用' in query
+            validation=lambda data:self._enrich(data,references,preferences,required)
+            text=await self._generate(prompt,request,report,on_progress,validation)
             plan=validate_plan_text(text,request)
-            plan=self._enrich(plan,references,preferences)
+            plan=self._enrich(plan,references,preferences,required)
             return self.store.save_plan(cid,0,plan,request.model_dump(mode='json'),query,report)
         except (Exception,asyncio.CancelledError) as exc:
             self._failure(cid,query,report,exc)
@@ -108,7 +117,9 @@ class TravelService:
         if len(prompt)>60000:raise ValueError('现有行程过长，请缩短规划范围')
         try:
             prompt,references=self._context(prompt,request,preferences)
-            text=await self._generate(prompt,request,report,on_progress)
+            required='引用' in original or '引用' in instruction
+            validation=lambda data:self._enrich(data,references,preferences,required)
+            text=await self._generate(prompt,request,report,on_progress,validation)
             plan=validate_plan_text(text,request)
             if preserve_hotels:
                 old={d['date']:d.get('hotel') for d in previous.plan['days']}
@@ -117,7 +128,7 @@ class TravelService:
                     before=old.get(day['date']);after=day.get('hotel')
                     if before and (not after or any(before.get(k)!=after.get(k) for k in fields)):
                         raise PlanValidationError([issue('days.hotel','hotel_changed','已要求保留酒店，但酒店或报价被修改')])
-            plan=self._enrich(plan,references,preferences)
+            plan=self._enrich(plan,references,preferences,required)
             return self.store.save_plan(cid,previous.version,plan,request.model_dump(mode='json'),instruction,report)
         except (Exception,asyncio.CancelledError) as exc:
             self._failure(cid,instruction,report,exc)

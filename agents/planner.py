@@ -97,24 +97,24 @@ class TripPlanner:
         )
 
     async def invoke(self, user_input: str, request: TripRequest | None = None,
-                     *, report: RunReport | None = None, callbacks=None) -> str:
+                     *, report: RunReport | None = None, callbacks=None, validators=()) -> str:
         result = ''
-        async for kind, text in self._run(user_input, request, False, report, callbacks):
+        async for kind, text in self._run(user_input, request, False, report, callbacks, validators):
             if kind == 'result':
                 result = text
         return result
 
     async def stream(self, user_input: str, request: TripRequest | None = None,
-                     *, report: RunReport | None = None, callbacks=None) -> AsyncIterator[str]:
+                     *, report: RunReport | None = None, callbacks=None, validators=()) -> AsyncIterator[str]:
         """阶段进度实时返回，仅输出通过校验的最终文本，不拼接失败草稿。"""
-        runner = self._run(user_input, request, True, report, callbacks)
+        runner = self._run(user_input, request, True, report, callbacks, validators)
         try:
             async for _, text in runner:
                 yield text
         finally:
             await runner.aclose()
 
-    async def _run(self, user_input, request, streaming, report, callbacks):
+    async def _run(self, user_input, request, streaming, report, callbacks, validators=()):
         report = report if report is not None else RunReport()
         if report.status != 'created':
             raise ValueError('RunReport只能用于一次运行')
@@ -157,6 +157,8 @@ class TripPlanner:
                     text, changes = recalculate_budget(text)
                     try:
                         data = validate_plan_text(text, request)
+                        if data is not None:
+                            for validator in validators:validator(data)
                         if attempt:
                             validate_repair_facts(original, text, request)
                     except PlanValidationError as exc:
