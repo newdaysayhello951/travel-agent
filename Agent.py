@@ -11,6 +11,8 @@ import asyncio
 from config import CONFIG
 from agents.planner import TripPlanner
 from render import format_plan_cli
+from schemas import PlanValidationError
+from reliability import ExecutionLimitError
 
 
 # 不传参数时使用的默认示例
@@ -85,4 +87,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (PlanValidationError, ExecutionLimitError, TimeoutError) as exc:
+        print(f"规划失败：{exc or '执行超时，请缩小规划范围后重试'}")
+        raise SystemExit(1)

@@ -55,13 +55,19 @@ async def main():
             row.update(output=text, parsed_plan=bool(parse_plan(text)), status='completed')
         except Exception as exc:
             row.update(status='failed', error_type=type(exc).__name__)
+            from pydantic import ValidationError
+            if isinstance(exc.__cause__, ValidationError):
+                row['validation_errors'] = [
+                    {'location':e['loc'], 'type':e['type'], 'message':e['msg']}
+                    for e in exc.__cause__.errors(include_input=False, include_context=False, include_url=False)
+                ]
         finally:
             await planner.mcp.close()
         row.update(seconds=round(time.perf_counter()-start, 2), model_calls=metrics.calls or None, reported_tokens=metrics.tokens or None)
         rows.append(row)
         path = ROOT / args.output
         path.parent.mkdir(parents=True, exist_ok=True)
-        sources = {name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in ('agents/planner.py', 'prompts.py', 'config.py')}
+        sources = {name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in ('agents/planner.py', 'prompts.py', 'config.py', 'schemas.py', 'reliability.py') if (ROOT/name).exists()}
         path.write_text(json.dumps({'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(), 'source_hashes':sources, 'model':CONFIG.model_name,'results':rows},ensure_ascii=False,indent=2),encoding='utf-8')
         print(json.dumps({k:v for k,v in row.items() if k not in ('output','query')},ensure_ascii=True),flush=True)
 

@@ -2,12 +2,17 @@
 单个旅行规划 Agent，直接调用高德 MCP 工具并流式输出行程。
 """
 import re
+import asyncio
 from typing import AsyncIterator
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 
 from mcp_client import McpClientManager
 from prompts import PLANNER_AGENT_PROMPT
+from config import CONFIG
+from reliability import ExecutionBudget, ExecutionLimitError, current_budget, tool_reliability
+from schemas import TripRequest, validate_plan_text
+from langgraph.errors import GraphRecursionError
 
 # 工具名 → 用户友好的中文标签
 # 路线工具在不同 MCP 服务商下命名不同（百炼托管版带 _by_address 后缀，
@@ -80,21 +85,46 @@ class TripPlanner:
             model=self.llm,
             tools=all_tools,
             system_prompt=PLANNER_AGENT_PROMPT,
+            middleware=[tool_reliability(CONFIG.tool_timeout, CONFIG.tool_retries, CONFIG.max_tool_calls)],
         )
 
     # ==================== 非流式调用 ====================
 
-    async def invoke(self, user_input: str) -> str:
+    async def invoke(self, user_input: str, request: TripRequest | None = None) -> str:
         """输入自然语言需求，返回完整旅行计划"""
-        await self.build()
-        result = await self._agent.ainvoke({
-            "messages": [{"role": "user", "content": user_input}]
-        })
-        return result["messages"][-1].content
+        token = current_budget.set(ExecutionBudget())
+        try:
+            async with asyncio.timeout(CONFIG.run_timeout):
+                await self.build()
+                result = await self._agent.ainvoke({
+                    "messages": [{"role": "user", "content": user_input}]
+                }, config={'recursion_limit': CONFIG.recursion_limit})
+                text = result["messages"][-1].content
+                validate_plan_text(text, request)
+                return text
+        except GraphRecursionError:
+            raise ExecutionLimitError('已达到规划执行步数上限，请缩小需求') from None
+        finally:
+            current_budget.reset(token)
 
     # ==================== 流式调用 ====================
 
-    async def stream(self, user_input: str) -> AsyncIterator[str]:
+    async def stream(self, user_input: str, request: TripRequest | None = None) -> AsyncIterator[str]:
+        """流式片段是预览，全部完成并通过校验后才视为正式结果。"""
+        token = current_budget.set(ExecutionBudget())
+        try:
+            async with asyncio.timeout(CONFIG.run_timeout):
+                output = []
+                async for chunk in self._stream_raw(user_input):
+                    output.append(chunk)
+                    yield chunk
+                validate_plan_text(''.join(output), request)
+        except GraphRecursionError:
+            raise ExecutionLimitError('已达到规划执行步数上限，请缩小需求') from None
+        finally:
+            current_budget.reset(token)
+
+    async def _stream_raw(self, user_input: str) -> AsyncIterator[str]:
         """
         流式输出旅行计划。
 
@@ -109,6 +139,7 @@ class TripPlanner:
         async for event in self._agent.astream_events(
             {"messages": [{"role": "user", "content": user_input}]},
             version="v2",
+            config={'recursion_limit': CONFIG.recursion_limit},
         ):
             kind = event.get("event", "")
 

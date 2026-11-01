@@ -94,6 +94,11 @@ class Config:
 
     # 公共生成参数
     temperature: float = 0.7
+    tool_timeout: float = field(default_factory=lambda: float(os.getenv('TOOL_TIMEOUT', '20')))
+    tool_retries: int = field(default_factory=lambda: int(os.getenv('TOOL_RETRIES', '1')))
+    max_tool_calls: int = field(default_factory=lambda: int(os.getenv('MAX_TOOL_CALLS', '24')))
+    run_timeout: float = field(default_factory=lambda: float(os.getenv('RUN_TIMEOUT', '180')))
+    recursion_limit: int = field(default_factory=lambda: int(os.getenv('RECURSION_LIMIT', '40')))
 
     # ---------- [适配2] MCP 连接 ----------
     mcp_transport: str = "http"
@@ -148,6 +153,10 @@ class Config:
 
     # 自动检查初始化
     def __post_init__(self):
+        if not (0 < self.tool_timeout <= 120 and 0 < self.run_timeout <= 900):
+            raise ValueError('工具超时须在(0,120]秒，总超时须在(0,900]秒')
+        if not (0 <= self.tool_retries <= 3 and 1 <= self.max_tool_calls <= 100 and 2 <= self.recursion_limit <= 200):
+            raise ValueError('重试、工具次数或图执行步数配置超出允许范围')
         if self.llm_provider == PROVIDER_DASHSCOPE:
             if not self.api_key:
                 raise ValueError(

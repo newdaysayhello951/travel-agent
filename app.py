@@ -187,6 +187,12 @@ if submit_btn:
         st.error("结束日期不能早于开始日期")
     else:
         planner = get_planner()
+        from schemas import TripRequest, PlanValidationError
+        from reliability import ExecutionLimitError
+        if (end_date - start_date).days > 30:
+            st.error("单次最多规划31天，请缩短日期范围。")
+            st.stop()
+        request = TripRequest(city=city.strip(), start_date=start_date, end_date=end_date)
         prompt = build_prompt(
             city, start_date, end_date,
             transport_selected, hotel_type, pref_selected, extra_requirements,
@@ -201,11 +207,15 @@ if submit_btn:
 
             async def _collect():
                 results = []
-                async for token in planner.stream(prompt):
+                async for token in planner.stream(prompt, request=request):
                     results.append(token)
                 return results
 
-            tokens = asyncio.run(_collect())
+            try:
+                tokens = asyncio.run(_collect())
+            except (PlanValidationError, ExecutionLimitError, TimeoutError):
+                st.error("规划未通过校验或执行超时/超限，请缩小需求后重试。")
+                st.stop()
 
             # 分离状态行和内容
             full_text = ""
@@ -213,7 +223,7 @@ if submit_btn:
             for token in tokens:
                 full_text += token
                 stripped = token.strip()
-                if any(stripped.startswith(emoji) for emoji in ["🌤️", "🏨", "🏛️", "🚶", "🚗", "🚌"]):
+                if any(stripped.startswith(emoji) for emoji in ["🌤️", "🏨", "🏛️", "🚶", "🚗", "🚌", "🔎", "📍", "🚲", "🔧"]):
                     status_lines.append(stripped)
 
             # 显示状态
