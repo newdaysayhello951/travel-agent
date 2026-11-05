@@ -11,6 +11,9 @@ __pycache__/
 # ---- 本机运行产物（仅本机环境，不提交）----
 .work/
 .data/
+.pytest_tmp/
+.pytest_cache/
+pytest-cache-files-*/
 
 # ---- 编辑器 / 系统 ----
 .vscode/
