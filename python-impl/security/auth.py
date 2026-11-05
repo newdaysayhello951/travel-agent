@@ -48,12 +48,16 @@ async def require_api_key(
     x_api_key: str | None = Header(default=None),
 ) -> str:
     """
-    FastAPI 依赖：校验 API Key，返回调用方标识。
+    FastAPI 依赖：校验 API Key、按调用方限流，返回调用方标识。
 
-    未配置密钥且只监听本机时返回 ANONYMOUS（本机演示模式）。
+    限流放在这里而不是各个接口里：**所有受鉴权保护的接口自动获得同一份配额**，
+    不会出现"聊天接口有限流、工具接口没有"的缺口。
+
+    未配置密钥且只监听本机时返回 ANONYMOUS（本机演示模式），同样受限流保护。
     """
     settings = get_settings()
     if not settings.auth_enforced:
+        _enforce_rate_limit(ANONYMOUS)
         return ANONYMOUS
 
     provided = extract_key(authorization, x_api_key)
@@ -67,10 +71,25 @@ async def require_api_key(
     # 逐个常时比较，避免通过响应时间区分密钥前缀。
     for key in settings.api_key_list:
         if secrets.compare_digest(provided, key):
-            return principal_id(key)
+            principal = principal_id(key)
+            _enforce_rate_limit(principal)
+            return principal
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="API Key 无效",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def _enforce_rate_limit(principal: str) -> None:
+    """超出配额时返回 429，并给出建议等待秒数"""
+    from security.ratelimit import get_limiter
+
+    allowed, wait_seconds = get_limiter().check(principal)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="请求过于频繁，请稍后再试",
+            headers={"Retry-After": str(max(1, int(wait_seconds + 0.999)))},
+        )

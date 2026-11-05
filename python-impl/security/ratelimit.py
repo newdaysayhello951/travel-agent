@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 @dataclass
@@ -66,3 +67,20 @@ class TokenBucketLimiter:
         now = time.monotonic()
         elapsed = max(0.0, now - bucket.updated_at)
         return int(min(self.capacity, bucket.tokens + elapsed * self.rate_per_second))
+
+
+@lru_cache(maxsize=1)
+def get_limiter() -> TokenBucketLimiter:
+    """
+    进程级限流器。
+
+    所有**需要鉴权的接口**共用同一份配额：限流下沉到鉴权依赖里，
+    因此不会出现"聊天接口有配额、工具接口没有"的缺口。
+    """
+    from config import get_settings
+
+    settings = get_settings()
+    return TokenBucketLimiter(
+        per_minute=settings.rate_limit_per_minute,
+        burst=settings.rate_limit_burst,
+    )

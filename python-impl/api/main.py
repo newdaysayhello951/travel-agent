@@ -36,11 +36,11 @@ from memory.working_memory import WorkingMemory
 from persistence import Database, SqlTicketStore
 from security import (
     KeyedConcurrencyGate,
-    TokenBucketLimiter,
     inspect_input,
     is_authenticated,
     require_api_key,
 )
+from security.ratelimit import get_limiter
 from settings import create_llm
 from tool_server.mcp_server import MCPToolServer, create_default_tools
 from tracing.llm_metering import TOKEN_USAGE, MeteredLLM
@@ -77,7 +77,8 @@ graph = None
 # 按调用方分桶的并发闸门与限流器：单个调用方仍受限（保护上游模型网关的额度），
 # 但不同调用方之间不再互相拖累——原先的全局 Semaphore(1) 会把整个服务锁成串行。
 concurrency_gate = KeyedConcurrencyGate(settings.max_concurrent_per_key)
-rate_limiter = TokenBucketLimiter(settings.rate_limit_per_minute, settings.rate_limit_burst)
+# 与鉴权依赖共用同一个限流器实例，保证响应头里的剩余配额是真实的
+rate_limiter = get_limiter()
 
 # 模型消息类型 → 对外角色名
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
@@ -187,15 +188,13 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _check_request(principal: str, message: str) -> None:
-    """限流 + 输入侧检查；不通过时抛 HTTPException。两个聊天接口共用。"""
-    allowed, wait_seconds = rate_limiter.check(principal)
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail="请求过于频繁，请稍后再试",
-            headers={"Retry-After": str(max(1, int(wait_seconds + 0.999)))},
-        )
+def _check_input(message: str) -> None:
+    """
+    输入侧检查。
+
+    限流已下沉到鉴权依赖（`require_api_key`），因此所有受保护接口统一受限，
+    这里只负责内容检查。
+    """
     verdict = inspect_input(message, settings.input_max_chars)
     if not verdict.allowed:
         raise HTTPException(status_code=400, detail=f"输入未通过检查：{verdict.reason}")
@@ -211,8 +210,8 @@ async def chat(
     if graph is None:
         raise HTTPException(status_code=503, detail="系统初始化中")
 
-    # 限流 + 输入侧检查（合规审查只覆盖输出，这里是补齐的输入侧防线）
-    _check_request(principal, request.message)
+    # 输入侧检查（限流已由 require_api_key 依赖统一处理）
+    _check_input(request.message)
 
     session_id = request.session_id or str(uuid.uuid4())
 
@@ -285,7 +284,7 @@ async def chat_stream(request: ChatRequest, principal: str = Depends(require_api
     if graph is None:
         raise HTTPException(status_code=503, detail="系统初始化中")
 
-    _check_request(principal, request.message)
+    _check_input(request.message)
 
     session_id = request.session_id or str(uuid.uuid4())
     initial_state = _initial_state(request.message, request.user_id, session_id)
