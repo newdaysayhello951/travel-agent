@@ -92,8 +92,16 @@ class Settings(BaseModel):
     host: str = "127.0.0.1"
     port: int = Field(default=8001, gt=0, lt=65536)
     request_timeout_seconds: int = Field(default=180, gt=0)
-    max_concurrent_requests: int = Field(default=1, gt=0)
     cors_allow_origins: list[str] = Field(default_factory=list)
+
+    # ── 安全 ──
+    auth_enabled: bool = True
+    # 逗号分隔的 API Key 列表；留空表示不校验（仅允许在本机监听时这么用）
+    api_keys_raw: str = ""
+    rate_limit_per_minute: int = Field(default=30, gt=0)
+    rate_limit_burst: int = Field(default=10, gt=0)
+    max_concurrent_per_key: int = Field(default=2, gt=0)
+    input_max_chars: int = Field(default=2000, gt=0)
 
     # ── 可观测 ──
     otel_service_name: str = "smart-cs-multi-agent"
@@ -107,6 +115,30 @@ class Settings(BaseModel):
         if not self.llm_model:
             missing.append("LLM_MODEL")
         return missing
+
+    # ── 安全相关的派生判断 ──
+
+    @property
+    def api_key_list(self) -> list[str]:
+        return [key.strip() for key in self.api_keys_raw.split(",") if key.strip()]
+
+    @property
+    def is_loopback(self) -> bool:
+        return self.host in ("127.0.0.1", "localhost", "::1")
+
+    @property
+    def auth_enforced(self) -> bool:
+        """只有配置了密钥且开启鉴权时才真正校验。"""
+        return self.auth_enabled and bool(self.api_key_list)
+
+    def security_problems(self) -> list[str]:
+        """启动前必须解决的问题。"""
+        if self.auth_enabled and not self.api_key_list and not self.is_loopback:
+            return [
+                f"HOST={self.host} 监听非本机地址时必须配置 API_KEYS，"
+                "否则接口将对外裸奔"
+            ]
+        return []
 
 
 @lru_cache(maxsize=1)
@@ -152,7 +184,12 @@ def get_settings() -> Settings:
         host=host,
         port=port,
         request_timeout_seconds=_env_int("REQUEST_TIMEOUT_SECONDS", 180),
-        max_concurrent_requests=_env_int("MAX_CONCURRENT_REQUESTS", 1),
+        auth_enabled=_env_bool("AUTH_ENABLED", True),
+        api_keys_raw=_env("API_KEYS", "") or "",
+        rate_limit_per_minute=_env_int("RATE_LIMIT_PER_MINUTE", 30),
+        rate_limit_burst=_env_int("RATE_LIMIT_BURST", 10),
+        max_concurrent_per_key=_env_int("MAX_CONCURRENT_PER_KEY", 2),
+        input_max_chars=_env_int("INPUT_MAX_CHARS", 2000),
         cors_allow_origins=[f"http://127.0.0.1:{port}", f"http://localhost:{port}"],
         otel_service_name=_env("OTEL_SERVICE_NAME", "smart-cs-multi-agent") or "smart-cs-multi-agent",
         otel_otlp_endpoint=_env("OTEL_EXPORTER_OTLP_ENDPOINT"),

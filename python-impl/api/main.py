@@ -19,7 +19,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from langchain_core.messages import HumanMessage
@@ -32,6 +32,12 @@ from memory.long_term import LongTermMemory
 from memory.short_term import ShortTermMemory
 from memory.working_memory import WorkingMemory
 from persistence import Database, SqlTicketStore
+from security import (
+    KeyedConcurrencyGate,
+    TokenBucketLimiter,
+    inspect_input,
+    require_api_key,
+)
 from settings import create_llm
 from tool_server.mcp_server import MCPToolServer, create_default_tools
 from tracing.otel_config import AgentMetrics, init_tracer
@@ -59,9 +65,10 @@ metrics = AgentMetrics()
 # 图在生命周期钩子里才编译；未就绪时接口返回 503
 graph = None
 
-# 全局并发闸门：避免本机演示把上游模型网关的额度与频率打爆，
-# 代价是吞吐被锁成串行，高并发下排队的请求会超时。
-request_gate = asyncio.Semaphore(settings.max_concurrent_requests)
+# 按调用方分桶的并发闸门与限流器：单个调用方仍受限（保护上游模型网关的额度），
+# 但不同调用方之间不再互相拖累——原先的全局 Semaphore(1) 会把整个服务锁成串行。
+concurrency_gate = KeyedConcurrencyGate(settings.max_concurrent_per_key)
+rate_limiter = TokenBucketLimiter(settings.rate_limit_per_minute, settings.rate_limit_burst)
 
 # 模型消息类型 → 对外角色名
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
@@ -76,6 +83,17 @@ async def lifespan(app: FastAPI):
         service_name=settings.otel_service_name,
         otlp_endpoint=settings.otel_otlp_endpoint,
     )
+
+    # 安全问题在启动阶段暴露，而不是等接口被访问才发现
+    problems = settings.security_problems()
+    if problems:
+        raise RuntimeError("安全配置不完整：" + "；".join(problems))
+    if not settings.auth_enforced:
+        logger.warning(
+            "接口未启用鉴权（AUTH_ENABLED=%s，已配置密钥=%s）。"
+            "本机演示可用，对外部署必须配置 API_KEYS。",
+            settings.auth_enabled, bool(settings.api_key_list),
+        )
 
     # 建表（幂等）。迁移需求出现前先用 create_all。
     database.create_all()
@@ -134,10 +152,28 @@ class ChatResponse(BaseModel):
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(
+    request: ChatRequest,
+    response: Response,
+    principal: str = Depends(require_api_key),
+) -> ChatResponse:
     """主聊天接口：一次请求对应一次图执行"""
     if graph is None:
         raise HTTPException(status_code=503, detail="系统初始化中")
+
+    # 限流：按调用方分桶；超限返回 429 并给出建议等待秒数
+    allowed, wait_seconds = rate_limiter.check(principal)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="请求过于频繁，请稍后再试",
+            headers={"Retry-After": str(max(1, int(wait_seconds + 0.999)))},
+        )
+
+    # 输入侧检查：合规审查只覆盖输出，这里是补齐的输入侧防线
+    verdict = inspect_input(request.message, settings.input_max_chars)
+    if not verdict.allowed:
+        raise HTTPException(status_code=400, detail=f"输入未通过检查：{verdict.reason}")
 
     session_id = request.session_id or str(uuid.uuid4())
 
@@ -157,7 +193,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     try:
         started = time.monotonic()
         async with asyncio.timeout(settings.request_timeout_seconds):
-            async with request_gate:
+            async with concurrency_gate.slot(principal):
                 result = await graph.ainvoke(initial_state, config=config)
         metrics.record_call("chat", (time.monotonic() - started) * 1000, True)
     except Exception as exc:
@@ -176,6 +212,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
     # 而模型实际看到的多轮上下文来自图检查点，两边会对不上。
     await short_term_memory.add_message(session_id, "user", request.message)
     await short_term_memory.add_message(session_id, "assistant", final_response)
+
+    response.headers["X-RateLimit-Remaining"] = str(rate_limiter.remaining(principal))
 
     return ChatResponse(
         response=final_response,
@@ -208,7 +246,7 @@ async def _messages_from_checkpoint(session_id: str) -> list[dict]:
 
 
 @app.get("/api/history/{session_id}")
-async def get_history(session_id: str) -> dict:
+async def get_history(session_id: str, principal: str = Depends(require_api_key)) -> dict:
     """
     获取某会话的对话记录。
 
@@ -224,7 +262,7 @@ async def get_history(session_id: str) -> dict:
 
 
 @app.delete("/api/history/{session_id}")
-async def clear_session(session_id: str) -> dict:
+async def clear_session(session_id: str, principal: str = Depends(require_api_key)) -> dict:
     """
     清空某会话的全部痕迹：短期记忆 + 工作记忆 + 图检查点。
 
@@ -251,13 +289,13 @@ async def clear_session(session_id: str) -> dict:
 
 
 @app.get("/api/tools")
-async def list_tools() -> dict:
+async def list_tools(principal: str = Depends(require_api_key)) -> dict:
     """工具发现接口（对应 MCP 的 tools/list）"""
     return {"tools": mcp_server.list_tools()}
 
 
 @app.post("/api/tools/call")
-async def call_tool(request: dict) -> dict:
+async def call_tool(request: dict, principal: str = Depends(require_api_key)) -> dict:
     """工具调用接口（对应 MCP 的 tools/call）"""
     result = await mcp_server.call_tool(
         name=request.get("name", ""),
@@ -272,7 +310,7 @@ async def call_tool(request: dict) -> dict:
 
 
 @app.get("/api/metrics")
-async def get_metrics() -> dict:
+async def get_metrics(principal: str = Depends(require_api_key)) -> dict:
     """系统指标与最近的工具调用日志"""
     return {
         "agent_metrics": metrics.get_summary(),
