@@ -1,4 +1,4 @@
-"""复用根目录原旅行项目环境变量，不复制或输出密钥。"""
+"""读取根目录 .env 中的模型配置，不复制或输出密钥。"""
 import os
 from pathlib import Path
 

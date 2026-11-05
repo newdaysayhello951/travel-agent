@@ -1,6 +1,5 @@
 # ---- 密钥 ----
 .env
-vector_store/
 *.log
 
 # ---- Python ----
@@ -9,14 +8,9 @@ __pycache__/
 .venv/
 .pip-cache/
 
-# ---- 本机沙箱临时目录（仅本机环境需要）----
-.tmp/
+# ---- 本机运行产物（仅本机环境，不提交）----
 .work/
 .data/
-.probe*/
-.p1/
-.p2/
-.tools/
 
 # ---- 编辑器 / 系统 ----
 .vscode/
