@@ -13,6 +13,7 @@ FastAPI 入口 — 本机网页与 REST 接口（非流式）
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, Field
@@ -166,6 +167,40 @@ class ChatResponse(BaseModel):
     compliance_passed: bool
 
 
+def _initial_state(text: str, user_id: str, session_id: str) -> dict:
+    """构造一次图调用的初始状态（非流式与流式接口共用）"""
+    return {
+        "messages": [HumanMessage(content=text)],
+        "user_id": user_id,
+        "session_id": session_id,
+        "intent": "",
+        "sub_results": {},
+        "compliance_passed": True,
+        "final_response": "",
+        "current_agent": "",
+        "retry_count": 0,
+    }
+
+
+def _sse(event: str, data: dict) -> str:
+    """把一帧数据格式化为 Server-Sent Events"""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _check_request(principal: str, message: str) -> None:
+    """限流 + 输入侧检查；不通过时抛 HTTPException。两个聊天接口共用。"""
+    allowed, wait_seconds = rate_limiter.check(principal)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="请求过于频繁，请稍后再试",
+            headers={"Retry-After": str(max(1, int(wait_seconds + 0.999)))},
+        )
+    verdict = inspect_input(message, settings.input_max_chars)
+    if not verdict.allowed:
+        raise HTTPException(status_code=400, detail=f"输入未通过检查：{verdict.reason}")
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -176,33 +211,12 @@ async def chat(
     if graph is None:
         raise HTTPException(status_code=503, detail="系统初始化中")
 
-    # 限流：按调用方分桶；超限返回 429 并给出建议等待秒数
-    allowed, wait_seconds = rate_limiter.check(principal)
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail="请求过于频繁，请稍后再试",
-            headers={"Retry-After": str(max(1, int(wait_seconds + 0.999)))},
-        )
-
-    # 输入侧检查：合规审查只覆盖输出，这里是补齐的输入侧防线
-    verdict = inspect_input(request.message, settings.input_max_chars)
-    if not verdict.allowed:
-        raise HTTPException(status_code=400, detail=f"输入未通过检查：{verdict.reason}")
+    # 限流 + 输入侧检查（合规审查只覆盖输出，这里是补齐的输入侧防线）
+    _check_request(principal, request.message)
 
     session_id = request.session_id or str(uuid.uuid4())
 
-    initial_state = {
-        "messages": [HumanMessage(content=request.message)],
-        "user_id": request.user_id,
-        "session_id": session_id,
-        "intent": "",
-        "sub_results": {},
-        "compliance_passed": True,
-        "final_response": "",
-        "current_agent": "",
-        "retry_count": 0,
-    }
+    initial_state = _initial_state(request.message, request.user_id, session_id)
     config = {"configurable": {"thread_id": session_id}}
 
     try:
@@ -258,6 +272,68 @@ async def _messages_from_checkpoint(session_id: str) -> list[dict]:
             "timestamp": None,
         })
     return messages
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest, principal: str = Depends(require_api_key)):
+    """
+    流式聊天接口（Server-Sent Events）。
+
+    每执行完一个节点就推一帧 `node` 事件，最后推一帧 `done` 携带完整结果。
+    这样前端在一次问答要跑 5 次模型调用的过程中能持续显示进展，而不是干等。
+    """
+    if graph is None:
+        raise HTTPException(status_code=503, detail="系统初始化中")
+
+    _check_request(principal, request.message)
+
+    session_id = request.session_id or str(uuid.uuid4())
+    initial_state = _initial_state(request.message, request.user_id, session_id)
+    config = {"configurable": {"thread_id": session_id}}
+
+    async def event_source():
+        final_response = ""
+        intent = "unknown"
+        compliance_passed = True
+        yield _sse("start", {"session_id": session_id})
+        try:
+            async with asyncio.timeout(settings.request_timeout_seconds):
+                async with concurrency_gate.slot(principal):
+                    async for chunk in graph.astream(
+                        initial_state, config=config, stream_mode="updates"
+                    ):
+                        for node, update in chunk.items():
+                            if isinstance(update, dict):
+                                if node == "supervisor_route":
+                                    intent = update.get("intent", intent)
+                                elif node == "compliance_check":
+                                    compliance_passed = update.get("compliance_passed", True)
+                                elif node == "synthesize":
+                                    final_response = update.get("final_response", final_response)
+                            yield _sse("node", {"node": node})
+        except TimeoutError:
+            yield _sse("error", {"detail": "处理超时，请缩短问题后重试"})
+            return
+        except Exception as exc:
+            logger.warning("Chat stream failed: %s", type(exc).__name__)
+            yield _sse("error", {"detail": "模型服务暂时不可用，请稍后再试"})
+            return
+
+        # 与流式无关的记录动作放在流末尾，保证只有跑完才落库
+        await short_term_memory.add_message(session_id, "user", request.message)
+        await short_term_memory.add_message(session_id, "assistant", final_response)
+        yield _sse("done", {
+            "session_id": session_id,
+            "response": final_response,
+            "intent": intent,
+            "compliance_passed": compliance_passed,
+        })
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/history/{session_id}")
