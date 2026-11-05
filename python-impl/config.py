@@ -72,9 +72,18 @@ class Settings(BaseModel):
     short_term_ttl_seconds: int = Field(default=1800, gt=0)
     # 内存降级路径最多缓存多少个会话（LRU 淘汰），防止会话数无限增长
     short_term_max_sessions: int = Field(default=1000, gt=0)
-    knowledge_index_path: Path = ROOT / ".data" / "knowledge" / "index"
     # 送进模型的历史消息条数上限；超出部分会从检查点里移除
     max_context_messages: int = Field(default=20, gt=0)
+
+    # ── 持久化 ──
+    # 业务数据（工单等）
+    database_path: Path = ROOT / ".data" / "app.db"
+    # 图检查点（多轮对话状态），与业务数据分开存放
+    checkpoint_db_path: Path = ROOT / ".data" / "checkpoints.sqlite"
+    # 知识库源文件目录
+    knowledge_dir: Path = ROOT / "knowledge"
+    # 知识库分块索引的缓存位置（<index_path>.meta.json）
+    knowledge_index_path: Path = ROOT / ".data" / "knowledge" / "index"
 
     # ── 工具 ──
     mcp_call_log_max: int = Field(default=200, gt=0)
@@ -132,6 +141,11 @@ def get_settings() -> Settings:
         short_term_max_sessions=_env_int("SHORT_TERM_MAX_SESSIONS", 1000),
         max_context_messages=_env_int("MAX_CONTEXT_MESSAGES", 20),
         mcp_call_log_max=_env_int("MCP_CALL_LOG_MAX", 200),
+        database_path=Path(_env("DATABASE_PATH", str(ROOT / ".data" / "app.db"))),
+        checkpoint_db_path=Path(
+            _env("CHECKPOINT_DB_PATH", str(ROOT / ".data" / "checkpoints.sqlite"))
+        ),
+        knowledge_dir=Path(_env("KNOWLEDGE_DIR", str(ROOT / "knowledge"))),
         knowledge_index_path=Path(
             _env("KNOWLEDGE_INDEX_PATH", str(ROOT / ".data" / "knowledge" / "index"))
         ),

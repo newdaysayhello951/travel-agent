@@ -4,8 +4,10 @@ FastAPI 入口 — 本机网页与 REST 接口（非流式）
 职责划分：
 - 接口层：请求校验（Pydantic）、HTTP 语义映射（503/504/429/502）、生命周期钩子
 - 会话层：短期记忆、工作记忆、图检查点的读写与清理
+- 持久化：工单落 SQLite，图检查点落 SQLite，知识库来自 knowledge/ 目录
 
-本模块持有进程级共享对象，因此同一进程内所有请求复用同一份模型客户端与同一张编译好的图。
+关于"会话事实来源"：模型看到的多轮上下文来自**图检查点**（持久化、与模型一致），
+`/api/history` 以短期记忆作为带时间戳的热缓存优先返回，未命中时回退到检查点。
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, Field
 
 from agents.supervisor import create_supervisor_graph
@@ -28,6 +31,7 @@ from config import get_settings
 from memory.long_term import LongTermMemory
 from memory.short_term import ShortTermMemory
 from memory.working_memory import WorkingMemory
+from persistence import Database, SqlTicketStore
 from settings import create_llm
 from tool_server.mcp_server import MCPToolServer, create_default_tools
 from tracing.otel_config import AgentMetrics, init_tracer
@@ -35,6 +39,10 @@ from tracing.otel_config import AgentMetrics, init_tracer
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+# ── 持久化 ──
+database = Database(settings.database_path)
+ticket_store = SqlTicketStore(database)
 
 # ── 进程级共享对象：只创建一次，所有请求复用 ──
 working_memory = WorkingMemory()
@@ -55,29 +63,13 @@ graph = None
 # 代价是吞吐被锁成串行，高并发下排队的请求会超时。
 request_gate = asyncio.Semaphore(settings.max_concurrent_requests)
 
-# 示例知识库：启动时装载，当前不落盘，重启后重新装载（add_document 幂等，不会重复）
-SAMPLE_KNOWLEDGE: list[tuple[str, str]] = [
-    (
-        "product_faq.md",
-        "我们的理财产品A年化收益率为3.5%-5.2%，投资期限为6个月至3年，最低投资金额10000元。"
-        "注意：理财非存款，产品有风险，投资须谨慎。",
-    ),
-    (
-        "refund_policy.md",
-        "退款政策：用户在购买后7天内可申请无理由退款，超过7天需提供合理原因。"
-        "退款将在3-5个工作日内原路退回。",
-    ),
-    (
-        "account_guide.md",
-        "开户流程：1.准备身份证原件 2.填写开户申请表 3.进行视频认证 4.设置交易密码 "
-        "5.完成风险评估问卷。整个流程约需15-30分钟。",
-    ),
-]
+# 模型消息类型 → 对外角色名
+_ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """yield 之前是启动准备，之后是关闭清理（当前无需清理的资源）"""
+    """yield 之前是启动准备，之后是关闭清理"""
     global graph
 
     init_tracer(
@@ -85,19 +77,31 @@ async def lifespan(app: FastAPI):
         otlp_endpoint=settings.otel_otlp_endpoint,
     )
 
-    # 模型配置缺失会在这里直接抛错，让服务启动失败，而不是等第一个请求进来才返回 502。
-    graph = create_supervisor_graph(
-        llm=create_llm(),
-        working_memory=working_memory,
-        long_term_memory=long_term_memory,
-        max_context_messages=settings.max_context_messages,
-        structured_method=settings.llm_structured_method,
-    )
+    # 建表（幂等）。迁移需求出现前先用 create_all。
+    database.create_all()
 
-    for source, content in SAMPLE_KNOWLEDGE:
-        long_term_memory.add_document(content=content, source=source)
+    # 知识库来自磁盘目录；索引比源文件新时直接复用缓存，不重复分块
+    stats = long_term_memory.load_or_rebuild(settings.knowledge_dir)
+    logger.info("知识库装载完成: %s", stats)
 
-    yield
+    # 检查点落在 SQLite，服务重启后多轮对话仍然可续
+    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_db_path)) as saver:
+        # 模型配置缺失会在这里直接抛错，让服务启动失败，而不是等第一个请求进来才返回 502。
+        graph = create_supervisor_graph(
+            llm=create_llm(),
+            working_memory=working_memory,
+            long_term_memory=long_term_memory,
+            ticket_store=ticket_store,
+            checkpointer=saver,
+            max_context_messages=settings.max_context_messages,
+            structured_method=settings.llm_structured_method,
+        )
+        try:
+            yield
+        finally:
+            graph = None
+
+    database.dispose()
 
 
 app = FastAPI(
@@ -181,11 +185,42 @@ async def chat(request: ChatRequest) -> ChatResponse:
     )
 
 
+async def _messages_from_checkpoint(session_id: str) -> list[dict]:
+    """从图检查点还原对话消息（检查点里没有逐条时间戳）"""
+    if graph is None:
+        return []
+    try:
+        snapshot = await graph.aget_state({"configurable": {"thread_id": session_id}})
+    except Exception:
+        logger.warning("读取图检查点失败: session=%s", session_id)
+        return []
+
+    values = getattr(snapshot, "values", None) or {}
+    messages = []
+    for message in values.get("messages", []) or []:
+        message_type = getattr(message, "type", "unknown")
+        messages.append({
+            "role": _ROLE_MAP.get(message_type, message_type),
+            "content": getattr(message, "content", ""),
+            "timestamp": None,
+        })
+    return messages
+
+
 @app.get("/api/history/{session_id}")
 async def get_history(session_id: str) -> dict:
-    """获取某会话的对话记录（来源：短期记忆）"""
-    history = await short_term_memory.get_history(session_id)
-    return {"session_id": session_id, "messages": history}
+    """
+    获取某会话的对话记录。
+
+    优先返回短期记忆（带时间戳、可过期、可走 Redis）；未命中时回退到图检查点
+    （持久化、与模型看到的上下文一致）。
+    """
+    cached = await short_term_memory.get_history(session_id)
+    if cached:
+        return {"session_id": session_id, "source": "cache", "messages": cached}
+
+    messages = await _messages_from_checkpoint(session_id)
+    return {"session_id": session_id, "source": "checkpoint", "messages": messages}
 
 
 @app.delete("/api/history/{session_id}")

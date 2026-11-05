@@ -1,60 +1,28 @@
 """
 工单处理 Agent — 创建、查询、更新与列出工单
 
-工单当前保存在进程内存的 TicketStore 中，重启即丢（持久化在后续阶段接入）。
-注意：本模块直接使用内部 TicketStore，尚未通过 tool_server 的 MCP 工具层调用。
+存储由外部注入：默认用进程内的 TicketStore（测试替身、无数据库场景），
+真实运行由 persistence.SqlTicketStore 提供数据库持久化。两者接口一致、可直接互换。
+
+注意：本模块直接使用存储实现，尚未通过 tool_server 的 MCP 工具层调用。
 """
 
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import datetime
-from enum import Enum
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from domain.ticket import (
+    PRIORITY_LABELS,
+    STATUS_LABELS,
+    check_transition,
+    new_ticket_id,
+)
 from tracing.otel_config import trace_agent_call
-
-
-class TicketStatus(str, Enum):
-    """工单生命周期状态"""
-    CREATED = "created"
-    PROCESSING = "processing"
-    RESOLVED = "resolved"
-    CLOSED = "closed"
-
-
-class TicketPriority(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    URGENT = "urgent"
-
-
-# 允许的状态流转图；不在表里的组合一律拒绝，避免出现非法状态跳转。
-ALLOWED_TRANSITIONS: dict[TicketStatus, set[TicketStatus]] = {
-    TicketStatus.CREATED: {TicketStatus.PROCESSING, TicketStatus.CLOSED},
-    TicketStatus.PROCESSING: {TicketStatus.RESOLVED, TicketStatus.CLOSED},
-    TicketStatus.RESOLVED: {TicketStatus.CLOSED},
-    TicketStatus.CLOSED: set(),
-}
-
-STATUS_LABELS: dict[str, str] = {
-    TicketStatus.CREATED.value: "已创建",
-    TicketStatus.PROCESSING.value: "处理中",
-    TicketStatus.RESOLVED.value: "已解决",
-    TicketStatus.CLOSED.value: "已关闭",
-}
-
-PRIORITY_LABELS: dict[str, str] = {
-    TicketPriority.LOW.value: "普通",
-    TicketPriority.MEDIUM.value: "中等",
-    TicketPriority.HIGH.value: "高",
-    TicketPriority.URGENT.value: "紧急",
-}
 
 
 TICKET_SYSTEM_PROMPT = """你是一个专业的工单处理Agent，负责处理客户的业务办理请求。
@@ -96,20 +64,20 @@ TICKET_SYSTEM_PROMPT = """你是一个专业的工单处理Agent，负责处理�
 
 
 class TicketStore:
-    """内存工单存储（重启即丢，持久化在后续阶段接入）"""
+    """进程内工单存储。仅用于测试与无数据库场景，重启即丢。"""
 
     def __init__(self):
         self._tickets: dict[str, dict] = {}
 
     def create(self, ticket_type: str, priority: str, summary: str,
                details: str, user_id: str) -> dict:
-        ticket_id = f"TK-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
         now = datetime.now().isoformat()
+        ticket_id = new_ticket_id()
         ticket = {
             "ticket_id": ticket_id,
             "type": ticket_type,
             "priority": priority,
-            "status": TicketStatus.CREATED.value,
+            "status": "created",
             "summary": summary,
             "details": details,
             "user_id": user_id,
@@ -126,41 +94,25 @@ class TicketStore:
         return [t for t in self._tickets.values() if t["user_id"] == user_id]
 
     def update_status(self, ticket_id: str, status: str) -> tuple[dict | None, str | None]:
-        """
-        按 ALLOWED_TRANSITIONS 校验并更新状态。
-
-        Returns:
-            (更新后的工单, None) 成功；(None, 失败原因) 失败
-        """
+        """按领域规则校验并更新状态；返回 (工单, 失败原因)。"""
         ticket = self._tickets.get(ticket_id)
         if ticket is None:
             return None, f"未找到工单号 {ticket_id}"
 
-        try:
-            target = TicketStatus(status)
-        except ValueError:
-            allowed = "、".join(STATUS_LABELS.values())
-            return None, f"不支持的状态「{status}」，可用状态：{allowed}"
+        error = check_transition(ticket["status"], status)
+        if error:
+            return None, error
 
-        current = TicketStatus(ticket["status"])
-        if target is current:
-            return ticket, None  # 幂等：重复设置同一状态视为成功
-
-        if target not in ALLOWED_TRANSITIONS[current]:
-            return None, (
-                f"不允许从「{STATUS_LABELS[current.value]}」流转到"
-                f"「{STATUS_LABELS[target.value]}」"
-            )
-
-        ticket["status"] = target.value
-        ticket["updated_at"] = datetime.now().isoformat()
+        if ticket["status"] != status:
+            ticket["status"] = status
+            ticket["updated_at"] = datetime.now().isoformat()
         return ticket, None
 
 
 class TicketHandlerAgent:
     """工单处理 Agent"""
 
-    def __init__(self, llm: ChatOpenAI, ticket_store: TicketStore | None = None):
+    def __init__(self, llm: ChatOpenAI, ticket_store: Any | None = None):
         self.llm = llm
         self.ticket_store = ticket_store or TicketStore()
 
@@ -216,7 +168,6 @@ class TicketHandlerAgent:
         ticket = self.ticket_store.query(ticket_id)
         if not ticket:
             return f"未找到工单号 {ticket_id}，请确认工单号是否正确。"
-
         return self._format_ticket(ticket, header="工单查询结果：")
 
     @trace_agent_call("ticket_update")
@@ -227,13 +178,12 @@ class TicketHandlerAgent:
         if not status:
             return (
                 f"请说明要把工单 {ticket_id} 更新为哪种状态，"
-                f"可选：{('、'.join(STATUS_LABELS.values()))}。"
+                f"可选：{'、'.join(STATUS_LABELS.values())}。"
             )
 
         ticket, error = self.ticket_store.update_status(ticket_id, status)
         if error:
             return f"工单状态更新失败：{error}"
-
         return self._format_ticket(ticket, header="工单状态已更新：")
 
     @trace_agent_call("ticket_list")
@@ -287,7 +237,9 @@ class TicketHandlerAgent:
         elif action == "query":
             result = "请提供需要查询的工单号，例如 TK-20261101-ABC123。"
         elif action == "update":
-            result = await self.update_ticket(ticket_id, str(ticket_info.get("status") or "").strip())
+            result = await self.update_ticket(
+                ticket_id, str(ticket_info.get("status") or "").strip()
+            )
         elif action == "list":
             result = await self.list_tickets(user_id)
         else:
