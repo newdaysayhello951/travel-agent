@@ -1,7 +1,11 @@
 """
-短期记忆 — 基于Redis的会话级记忆
-存储最近N轮对话上下文，设置TTL自动过期。
-适合维护多轮对话的连续性。
+短期记忆 — 会话级对话记录
+
+优先使用 Redis（支持多进程/多实例共享，带 TTL 与滑动窗口）；未安装 redis 包或连接失败时，
+自动降级到进程内存。
+
+注意两条路径的行为并不一致：Redis 路径有 TTL 过期，内存降级路径只有条数上限、没有过期时间，
+也不跨进程共享。降级过程目前是静默的（没有日志与指标），因此 Redis 真的不可用时外部无法察觉。
 """
 
 from __future__ import annotations
@@ -18,13 +22,13 @@ except ImportError:
 
 class ShortTermMemory:
     """
-    短期记忆：基于Redis的会话缓存。
+    短期记忆：会话级对话记录缓存。
 
-    特点：
-    - Redis存储，支持分布式部署
-    - TTL自动过期（默认30分钟）
-    - 保留最近N轮对话
-    - 支持滑动窗口淘汰
+    两条实现路径：
+    - Redis 可用：rpush 追加 → ltrim 只保留最近 max_turns 条 → expire 设置过期
+    - Redis 不可用：退化为进程内存字典，只保留条数上限，没有过期时间
+
+    连接是懒加载的：只有真正读写时才尝试连接，这样 Redis 不可用也不会拖垮服务启动。
     """
 
     def __init__(
@@ -98,20 +102,3 @@ class ShortTermMemory:
             await r.delete(self._session_key(session_id))
         else:
             self._fallback_store.pop(session_id, None)
-
-    async def get_context_window(self, session_id: str, max_tokens: int = 4000) -> str:
-        """获取适配上下文窗口大小的对话历史文本"""
-        history = await self.get_history(session_id)
-
-        context_parts = []
-        estimated_tokens = 0
-
-        for msg in reversed(history):
-            msg_text = f"{msg['role']}: {msg['content']}"
-            msg_tokens = len(msg_text) // 2  # 粗略估算
-            if estimated_tokens + msg_tokens > max_tokens:
-                break
-            context_parts.insert(0, msg_text)
-            estimated_tokens += msg_tokens
-
-        return "\n".join(context_parts)

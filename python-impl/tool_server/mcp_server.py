@@ -1,7 +1,16 @@
 """
-MCP工具协议服务端 — Model Context Protocol实现
-遵循Anthropic MCP标准，通过JSON-RPC 2.0提供工具注册/发现/调用能力。
-支持动态工具扩展，Agent通过统一接口调用外部系统。
+MCP 工具协议服务端 — Model Context Protocol 的「工具子集」
+
+实现了 MCP 中与 tools 相关的部分：工具注册、工具发现（tools/list）、工具调用（tools/call），
+消息格式遵循 JSON-RPC 2.0，工具入参用 JSON Schema 声明，错误码使用协议标准值。
+
+与完整 MCP 实现的差距（当前边界）：
+- 是进程内直接函数调用，没有 stdio / HTTP 传输层
+- 没有 initialize 握手与 capabilities 协商
+- 未实现 resources、prompts 两类能力
+- `requires_auth` 字段已声明，但调用链上尚未校验
+
+另外两点现实情况：注册的工具返回的是演示数据；业务层（agents/）目前并未经由本层调用工具。
 """
 
 from __future__ import annotations
@@ -36,18 +45,16 @@ class ToolCallResult:
 
 class MCPToolServer:
     """
-    MCP工具服务端。
+    MCP 工具服务端（进程内实现）。
 
-    实现 Model Context Protocol 的核心功能：
-    1. 工具注册 (Tool Registration)
-    2. 工具发现 (Tool Discovery) - Agent可查询可用工具列表
-    3. 工具调用 (Tool Invocation) - 通过JSON-RPC 2.0协议调用
-    4. 结果返回 (Result Delivery)
+    能力：
+    1. 工具注册 (Tool Registration) —— 直接调用或装饰器声明
+    2. 工具发现 (Tool Discovery) —— 对应协议方法 tools/list
+    3. 工具调用 (Tool Invocation) —— 对应协议方法 tools/call
+    4. 结果与调用日志 (Result & Call Log)
 
-    遵循MCP规范：
-    - 使用JSON-RPC 2.0消息格式
-    - 支持工具的inputSchema声明
-    - 提供标准化的错误码
+    协议层面使用 JSON-RPC 2.0 消息格式、inputSchema 声明与标准错误码，
+    但没有传输层，`handle_jsonrpc()` 目前也没有挂到任何 HTTP 路由上。
     """
 
     def __init__(self):

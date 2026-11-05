@@ -1,28 +1,38 @@
-"""读取根目录 .env 中的模型配置，不复制或输出密钥。"""
-import os
-from pathlib import Path
+"""按统一配置创建模型实例。不复制、不输出密钥。"""
 
-from dotenv import load_dotenv
+from __future__ import annotations
+
 from langchain_openai import ChatOpenAI
 
-ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT / '.env')
+from config import ROOT, get_settings
+
+__all__ = ["ROOT", "create_llm"]
 
 
-def create_llm():
-    provider = os.getenv('LLM_PROVIDER', 'openai_compatible')
-    if provider == 'dashscope':
-        key = os.getenv('DASHSCOPE_API_KEY')
-        base = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-        model = os.getenv('DASHSCOPE_MODEL', 'qwen3-max')
-    else:
-        key = os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY')
-        base = os.getenv('LLM_BASE_URL') or os.getenv('OPENAI_BASE_URL')
-        model = os.getenv('LLM_MODEL') or os.getenv('OPENAI_MODEL')
-    if not key or not model:
-        raise RuntimeError('缺少模型配置，请检查根目录 .env 中的模型名称与密钥')
-    extra = {}
-    if os.getenv('LLM_ENABLE_THINKING', 'false').lower() not in ('1', 'true', 'yes'):
-        extra['enable_thinking'] = False
-    return ChatOpenAI(model=model, api_key=key, base_url=base, temperature=0,
-                      timeout=45, max_retries=0, extra_body=extra or None)
+def create_llm() -> ChatOpenAI:
+    """
+    创建模型客户端。
+
+    配置缺失时抛 RuntimeError，让服务在启动阶段失败，而不是等请求进来才返回 502。
+    """
+    settings = get_settings()
+
+    missing = settings.missing_llm_fields()
+    if missing:
+        raise RuntimeError(
+            "缺少必需的模型配置：" + "、".join(missing)
+            + "。请检查根目录 .env（可参考 .env.example）"
+        )
+
+    # 默认关闭模型的思考模式，降低延迟与 token 消耗。
+    extra_body = None if settings.llm_enable_thinking else {"enable_thinking": False}
+
+    return ChatOpenAI(
+        model=settings.llm_model,
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        temperature=0,
+        timeout=settings.llm_timeout_seconds,
+        max_retries=settings.llm_max_retries,
+        extra_body=extra_body,
+    )

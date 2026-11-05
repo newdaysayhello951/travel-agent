@@ -1,7 +1,10 @@
 """
-全链路追踪 — OpenTelemetry集成
-为每个Agent调用创建Span，记录延迟、Token消耗、路由决策等关键指标。
-支持导出到Jaeger/Zipkin/LangSmith等后端。
+全链路追踪 — OpenTelemetry 接入
+
+用装饰器为每个 Agent 方法创建 span，记录耗时、成败、结果字段名与异常。
+导出目标由配置决定：配置了 OTLP 收集器地址就走 OTLP，否则退化为打印到标准输出。
+
+当前边界：没有采集 token 消耗，也没有配置采样率。
 """
 
 from __future__ import annotations
@@ -72,11 +75,15 @@ def trace_agent_call(agent_name: str) -> Callable:
     """
     Agent调用追踪装饰器。
 
-    为每个Agent方法创建一个Span，记录：
-    - agent.name: Agent名称
-    - agent.duration_ms: 调用耗时
-    - agent.input_size: 输入大小
+    为每个被装饰的方法创建一个 span，写入以下属性：
+    - agent.name: Agent 名称
+    - agent.method: 方法名
+    - agent.duration_ms: 调用耗时（毫秒）
     - agent.success: 是否成功
+    - agent.result_keys: 返回字典的键名（仅当返回值为 dict）
+    - agent.error: 异常信息（仅失败时）
+
+    记录异常后会重新抛出，异常处理责任仍在上层，观测层不改变业务行为。
 
     用法：
         @trace_agent_call("knowledge_rag")
