@@ -30,6 +30,7 @@ _tracer = None
 def init_tracer(
     service_name: str = "smart-cs-multi-agent",
     otlp_endpoint: str | None = None,
+    sample_ratio: float = 1.0,
 ) -> None:
     """
     初始化OpenTelemetry追踪器。
@@ -37,6 +38,7 @@ def init_tracer(
     Args:
         service_name: 服务名称
         otlp_endpoint: OTLP收集器地址，None则输出到控制台
+        sample_ratio: 采样比例；小于 1 时按 TraceId 比例采样，用于控制追踪数据量
     """
     global _tracer
 
@@ -44,7 +46,12 @@ def init_tracer(
         return
 
     resource = Resource.create({"service.name": service_name})
-    provider = TracerProvider(resource=resource)
+    provider_kwargs: dict[str, Any] = {"resource": resource}
+    if sample_ratio < 1.0:
+        # 全量上报在高流量下会淹没后端，采样是控制追踪数据量的主要手段
+        from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+        provider_kwargs["sampler"] = TraceIdRatioBased(max(0.0, min(1.0, sample_ratio)))
+    provider = TracerProvider(**provider_kwargs)
 
     if otlp_endpoint:
         try:
@@ -94,20 +101,30 @@ def trace_agent_call(agent_name: str) -> Callable:
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> Any:
             tracer = get_tracer()
-
-            if tracer is None:
-                return await func(*args, **kwargs)
-
+            started = time.perf_counter()
             span_name = f"agent.{agent_name}.{func.__name__}"
+
+            # 追踪不可用时也要记录指标：观测能力缺失不应该让业务指标一起消失。
+            if tracer is None:
+                try:
+                    result = await func(*args, **kwargs)
+                except Exception:
+                    AGENT_METRICS.record_call(
+                        agent_name, (time.perf_counter() - started) * 1000, False
+                    )
+                    raise
+                AGENT_METRICS.record_call(
+                    agent_name, (time.perf_counter() - started) * 1000, True
+                )
+                return result
 
             with tracer.start_as_current_span(span_name) as span:
                 span.set_attribute("agent.name", agent_name)
                 span.set_attribute("agent.method", func.__name__)
 
-                start_time = time.time()
                 try:
                     result = await func(*args, **kwargs)
-                    duration_ms = (time.time() - start_time) * 1000
+                    duration_ms = (time.perf_counter() - started) * 1000
 
                     span.set_attribute("agent.duration_ms", duration_ms)
                     span.set_attribute("agent.success", True)
@@ -115,14 +132,16 @@ def trace_agent_call(agent_name: str) -> Callable:
                     if isinstance(result, dict):
                         span.set_attribute("agent.result_keys", str(list(result.keys())))
 
+                    AGENT_METRICS.record_call(agent_name, duration_ms, True)
                     return result
 
                 except Exception as e:
-                    duration_ms = (time.time() - start_time) * 1000
+                    duration_ms = (time.perf_counter() - started) * 1000
                     span.set_attribute("agent.duration_ms", duration_ms)
                     span.set_attribute("agent.success", False)
                     span.set_attribute("agent.error", str(e))
                     span.record_exception(e)
+                    AGENT_METRICS.record_call(agent_name, duration_ms, False)
                     raise
 
         return wrapper
@@ -155,3 +174,7 @@ class AgentMetrics:
                 "error_rate": errors / calls if calls > 0 else 0,
             }
         return summary
+
+
+# 全局指标实例：装饰器与接口层共用同一份统计，避免"埋点写了两套、只接通一套"
+AGENT_METRICS = AgentMetrics()

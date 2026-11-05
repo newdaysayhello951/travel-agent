@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from agents.supervisor import create_supervisor_graph
 from config import get_settings
+from logging_setup import configure_logging
 from memory.long_term import LongTermMemory
 from memory.short_term import ShortTermMemory
 from memory.working_memory import WorkingMemory
@@ -41,7 +42,8 @@ from security import (
 )
 from settings import create_llm
 from tool_server.mcp_server import MCPToolServer, create_default_tools
-from tracing.otel_config import AgentMetrics, init_tracer
+from tracing.llm_metering import TOKEN_USAGE, MeteredLLM
+from tracing.otel_config import AGENT_METRICS, init_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,7 @@ mcp_server = create_default_tools(
     ticket_store=ticket_store,
     long_term_memory=long_term_memory,
 )
-metrics = AgentMetrics()
+metrics = AGENT_METRICS
 
 # 图在生命周期钩子里才编译；未就绪时接口返回 503
 graph = None
@@ -85,9 +87,14 @@ async def lifespan(app: FastAPI):
     """yield 之前是启动准备，之后是关闭清理"""
     global graph
 
+    # 放在这里而不是模块导入时：uvicorn 会在导入 app 之后才配置自己的日志，
+    # 那一步会覆盖模块级添加的 handler，导致应用日志被吞掉。
+    configure_logging(settings.log_level)
+
     init_tracer(
         service_name=settings.otel_service_name,
         otlp_endpoint=settings.otel_otlp_endpoint,
+        sample_ratio=settings.otel_sample_ratio,
     )
 
     # 安全问题在启动阶段暴露，而不是等接口被访问才发现
@@ -112,7 +119,8 @@ async def lifespan(app: FastAPI):
     async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_db_path)) as saver:
         # 模型配置缺失会在这里直接抛错，让服务启动失败，而不是等第一个请求进来才返回 502。
         graph = create_supervisor_graph(
-            llm=create_llm(),
+            # 用代理包一层做 token 计量，Agent 代码不需要任何改动
+            llm=MeteredLLM(create_llm(), label=settings.llm_model or "chat"),
             working_memory=working_memory,
             long_term_memory=long_term_memory,
             tool_server=mcp_server,
@@ -334,6 +342,7 @@ async def get_metrics(principal: str = Depends(require_api_key)) -> dict:
     """系统指标与最近的工具调用日志"""
     return {
         "agent_metrics": metrics.get_summary(),
+        "token_usage": TOKEN_USAGE.get_summary(),
         "tool_call_log": mcp_server.get_call_log(last_n=20),
     }
 

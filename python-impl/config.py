@@ -51,6 +51,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.lower() in ("1", "true", "yes", "on")
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = _env(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"环境变量 {name} 需要是数字，当前值为 {raw!r}") from exc
+
+
 class Settings(BaseModel):
     """进程级配置快照（带类型与取值范围校验）"""
 
@@ -104,8 +114,11 @@ class Settings(BaseModel):
     input_max_chars: int = Field(default=2000, gt=0)
 
     # ── 可观测 ──
+    log_level: str = "INFO"
     otel_service_name: str = "smart-cs-multi-agent"
     otel_otlp_endpoint: str | None = None
+    # 追踪采样比例；1.0 表示全采，小于 1 时用 TraceIdRatioBased 采样
+    otel_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
 
     def missing_llm_fields(self) -> list[str]:
         """返回缺失的必需模型配置项名称，供启动时给出明确报错。"""
@@ -193,4 +206,6 @@ def get_settings() -> Settings:
         cors_allow_origins=[f"http://127.0.0.1:{port}", f"http://localhost:{port}"],
         otel_service_name=_env("OTEL_SERVICE_NAME", "smart-cs-multi-agent") or "smart-cs-multi-agent",
         otel_otlp_endpoint=_env("OTEL_EXPORTER_OTLP_ENDPOINT"),
+        log_level=_env("LOG_LEVEL", "INFO") or "INFO",
+        otel_sample_ratio=_env_float("OTEL_SAMPLE_RATIO", 1.0),
     )
