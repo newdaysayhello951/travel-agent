@@ -150,6 +150,14 @@ class KnowledgeRAGAgent:
 
         reranked_docs = await self.rerank_documents(rewritten_query, raw_docs, top_k=3)
 
+        # 纯 ASCII 标记：中文关键字在 Windows 控制台编码下 grep 不可靠。
+        # 默认 DEBUG 级，排查检索问题时可把 LOG_LEVEL 设为 DEBUG。
+        logger.debug(
+            "RAG_DEBUG q_len=%d rewrite_len=%d raw=%d reranked=%d last_msg=%r",
+            len(original_query or ""), len(rewritten_query or ""),
+            len(raw_docs), len(reranked_docs), (original_query or "")[:30],
+        )
+
         answer = await self.generate_answer(original_query, reranked_docs)
 
         # sub_results 没有 reducer（默认覆盖语义），需要自己把已有结果合并进来。
