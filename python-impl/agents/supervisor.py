@@ -227,7 +227,7 @@ def create_supervisor_graph(
     llm: ChatOpenAI | None = None,
     working_memory: WorkingMemory | None = None,
     long_term_memory: LongTermMemory | None = None,
-    ticket_store: Any | None = None,
+    tool_server: Any | None = None,
     checkpointer: Any | None = None,
     enable_checkpointing: bool = True,
     max_context_messages: int = 20,
@@ -240,7 +240,7 @@ def create_supervisor_graph(
         llm: 语言模型实例；为 None 时按根目录 .env 创建
         working_memory: 工作记忆，用于把上下文注入路由判断
         long_term_memory: 长期记忆（知识库），供知识问答 Agent 检索
-        ticket_store: 工单存储；不传则用进程内实现（测试场景）
+        tool_server: MCP 工具服务端；工单 Agent 通过它调用工具，而不是直接操作存储
         checkpointer: 图检查点实现；不传且 enable_checkpointing 为真时用 MemorySaver
         enable_checkpointing: 是否启用检查点（checkpointer 已显式传入时此参数被忽略）
         max_context_messages: 历史消息条数上限，超出部分从检查点移除
@@ -258,7 +258,7 @@ def create_supervisor_graph(
     supervisor = SupervisorNode(llm, working_memory, max_context_messages, structured_method)
 
     knowledge_agent = KnowledgeRAGAgent(llm, long_term_memory)
-    ticket_agent = TicketHandlerAgent(llm, ticket_store)
+    ticket_agent = TicketHandlerAgent(llm, tool_server)
     compliance_agent = ComplianceCheckerAgent(llm)
 
     graph = StateGraph(AgentState)

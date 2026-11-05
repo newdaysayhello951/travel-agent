@@ -110,11 +110,30 @@ class TicketStore:
 
 
 class TicketHandlerAgent:
-    """工单处理 Agent"""
+    """
+    工单处理 Agent。
 
-    def __init__(self, llm: ChatOpenAI, ticket_store: Any | None = None):
+    所有工单操作都**经由 MCP 工具层**（`MCPToolServer.call_tool`），不直接接触存储——
+    这样把工具实现换成真实工单系统时，本类不需要改动。
+    """
+
+    def __init__(self, llm: ChatOpenAI, tool_server: Any | None = None):
         self.llm = llm
-        self.ticket_store = ticket_store or TicketStore()
+        self.tool_server = tool_server
+
+    async def _call_tool(self, name: str, arguments: dict) -> Any:
+        """
+        调用工具层。
+
+        `authenticated=True`：Agent 只在已鉴权的 HTTP 请求内运行，内部调用视为已鉴权；
+        对外的 HTTP 入口（`/api/tools/call`、`/mcp`）仍按真实鉴权结果校验。
+        """
+        if self.tool_server is None:
+            raise RuntimeError("工单 Agent 未接入工具层")
+        result = await self.tool_server.call_tool(name, arguments, authenticated=True)
+        if not result.success:
+            raise RuntimeError(result.error or "工具调用失败")
+        return result.result
 
     @trace_agent_call("ticket_analyze")
     async def analyze_request(self, user_message: str) -> dict:
@@ -141,14 +160,17 @@ class TicketHandlerAgent:
 
     @trace_agent_call("ticket_create")
     async def create_ticket(self, ticket_info: dict, user_id: str) -> str:
-        """创建工单"""
-        ticket = self.ticket_store.create(
-            ticket_type=ticket_info.get("ticket_type", "general"),
-            priority=ticket_info.get("priority", "medium"),
-            summary=ticket_info.get("summary", ""),
-            details=ticket_info.get("details", ""),
-            user_id=user_id,
-        )
+        """通过工具层创建工单"""
+        try:
+            ticket = await self._call_tool("ticket_create", {
+                "ticket_type": ticket_info.get("ticket_type", "general"),
+                "priority": ticket_info.get("priority", "medium"),
+                "summary": ticket_info.get("summary", ""),
+                "details": ticket_info.get("details", ""),
+                "user_id": user_id,
+            })
+        except RuntimeError as exc:
+            return f"工单创建失败：{exc}"
 
         priority_label = PRIORITY_LABELS.get(ticket["priority"], "中等")
 
@@ -164,10 +186,11 @@ class TicketHandlerAgent:
 
     @trace_agent_call("ticket_query")
     async def query_ticket(self, ticket_id: str) -> str:
-        """查询单个工单"""
-        ticket = self.ticket_store.query(ticket_id)
-        if not ticket:
-            return f"未找到工单号 {ticket_id}，请确认工单号是否正确。"
+        """通过工具层查询单个工单"""
+        try:
+            ticket = await self._call_tool("ticket_query", {"ticket_id": ticket_id})
+        except RuntimeError as exc:
+            return f"工单查询失败：{exc}"
         return self._format_ticket(ticket, header="工单查询结果：")
 
     @trace_agent_call("ticket_update")
@@ -181,15 +204,21 @@ class TicketHandlerAgent:
                 f"可选：{'、'.join(STATUS_LABELS.values())}。"
             )
 
-        ticket, error = self.ticket_store.update_status(ticket_id, status)
-        if error:
-            return f"工单状态更新失败：{error}"
+        try:
+            ticket = await self._call_tool(
+                "ticket_update", {"ticket_id": ticket_id, "status": status}
+            )
+        except RuntimeError as exc:
+            return f"工单状态更新失败：{exc}"
         return self._format_ticket(ticket, header="工单状态已更新：")
 
     @trace_agent_call("ticket_list")
     async def list_tickets(self, user_id: str) -> str:
         """列出某个用户的工单"""
-        tickets = self.ticket_store.query_by_user(user_id)
+        try:
+            tickets = await self._call_tool("ticket_list", {"user_id": user_id})
+        except RuntimeError as exc:
+            return f"工单查询失败：{exc}"
         if not tickets:
             return "您当前没有工单记录。"
 

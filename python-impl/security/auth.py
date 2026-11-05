@@ -30,6 +30,11 @@ def principal_id(api_key: str) -> str:
     return "key:" + hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
 
 
+def is_authenticated(principal: str) -> bool:
+    """判断调用方是否为已鉴权身份（ANONYMOUS 表示未启用鉴权的本机演示）。"""
+    return principal != ANONYMOUS
+
+
 def extract_key(authorization: str | None, x_api_key: str | None) -> str | None:
     if x_api_key and x_api_key.strip():
         return x_api_key.strip()

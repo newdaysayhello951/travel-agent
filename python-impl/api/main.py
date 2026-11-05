@@ -36,6 +36,7 @@ from security import (
     KeyedConcurrencyGate,
     TokenBucketLimiter,
     inspect_input,
+    is_authenticated,
     require_api_key,
 )
 from settings import create_llm
@@ -59,7 +60,12 @@ short_term_memory = ShortTermMemory(
     max_sessions=settings.short_term_max_sessions,
 )
 long_term_memory = LongTermMemory(index_path=str(settings.knowledge_index_path))
-mcp_server = create_default_tools(MCPToolServer(max_call_log=settings.mcp_call_log_max))
+# 工具层绑定真实存储与知识库；工单类工具声明了 requires_auth
+mcp_server = create_default_tools(
+    MCPToolServer(max_call_log=settings.mcp_call_log_max),
+    ticket_store=ticket_store,
+    long_term_memory=long_term_memory,
+)
 metrics = AgentMetrics()
 
 # 图在生命周期钩子里才编译；未就绪时接口返回 503
@@ -109,7 +115,7 @@ async def lifespan(app: FastAPI):
             llm=create_llm(),
             working_memory=working_memory,
             long_term_memory=long_term_memory,
-            ticket_store=ticket_store,
+            tool_server=mcp_server,
             checkpointer=saver,
             max_context_messages=settings.max_context_messages,
             structured_method=settings.llm_structured_method,
@@ -300,6 +306,7 @@ async def call_tool(request: dict, principal: str = Depends(require_api_key)) ->
     result = await mcp_server.call_tool(
         name=request.get("name", ""),
         arguments=request.get("arguments", {}),
+        authenticated=is_authenticated(principal),
     )
     return {
         "success": result.success,
@@ -307,6 +314,19 @@ async def call_tool(request: dict, principal: str = Depends(require_api_key)) ->
         "error": result.error,
         "duration_ms": result.duration_ms,
     }
+
+
+@app.post("/mcp")
+async def mcp_jsonrpc(request: dict, principal: str = Depends(require_api_key)) -> dict:
+    """
+    MCP 传输入口（JSON-RPC 2.0）。
+
+    支持 `tools/list`、`tools/call`、`ping`；未知方法返回 -32601，内部异常返回 -32603。
+    声明了 `requires_auth` 的工具只有已鉴权的调用方才能执行。
+    """
+    return await mcp_server.handle_jsonrpc(
+        request, authenticated=is_authenticated(principal)
+    )
 
 
 @app.get("/api/metrics")
