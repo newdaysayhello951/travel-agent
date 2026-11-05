@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from agents.knowledge_rag import KnowledgeRAGAgent
 from agents.ticket_handler import TicketHandlerAgent
 from agents.compliance_checker import ComplianceCheckerAgent
+from agents.revision import RevisionNode
 from memory.working_memory import WorkingMemory
 from memory.long_term import LongTermMemory
 from tracing.otel_config import trace_agent_call
@@ -232,6 +233,7 @@ def create_supervisor_graph(
     enable_checkpointing: bool = True,
     max_context_messages: int = 20,
     structured_method: str = "function_calling",
+    max_compliance_retries: int = 1,
 ) -> CompiledStateGraph:
     """
     构建 Supervisor 编排的 StateGraph。
@@ -260,6 +262,7 @@ def create_supervisor_graph(
     knowledge_agent = KnowledgeRAGAgent(llm, long_term_memory)
     ticket_agent = TicketHandlerAgent(llm, tool_server)
     compliance_agent = ComplianceCheckerAgent(llm)
+    revision_agent = RevisionNode(llm)
 
     graph = StateGraph(AgentState)
 
@@ -268,6 +271,7 @@ def create_supervisor_graph(
     graph.add_node("ticket_handler", ticket_agent.process)
     graph.add_node("compliance_check", compliance_agent.process)
     graph.add_node("synthesize", supervisor.synthesize_response)
+    graph.add_node("revise", revision_agent.revise)
 
     graph.set_entry_point("supervisor_route")
 
@@ -283,7 +287,26 @@ def create_supervisor_graph(
     # 两条业务分支都必须经过合规审查，这个约束由图结构强制，不依赖调用方自觉。
     graph.add_edge("knowledge_rag", "compliance_check")
     graph.add_edge("ticket_handler", "compliance_check")
-    graph.add_edge("compliance_check", "synthesize")
+
+    def after_compliance(state: AgentState) -> str:
+        """
+        合规通过就收尾；不通过且还有重试额度就回到整改节点。
+
+        这条回边让图里第一次出现**环**：合规不再是"一次性闸门"，
+        而是 evaluator-optimizer 里的评估环节——评估不过就让生成侧改。
+        """
+        if state.get("compliance_passed", True):
+            return "synthesize"
+        if state.get("retry_count", 0) < max_compliance_retries:
+            return "revise"
+        return "synthesize"
+
+    graph.add_conditional_edges(
+        "compliance_check",
+        after_compliance,
+        {"synthesize": "synthesize", "revise": "revise"},
+    )
+    graph.add_edge("revise", "compliance_check")
     graph.add_edge("synthesize", END)
 
     if checkpointer is None and enable_checkpointing:

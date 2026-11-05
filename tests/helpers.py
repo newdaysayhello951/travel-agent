@@ -37,21 +37,31 @@ class FakeLLM:
         self.intent = intent
         self.text_calls = 0
         self.structured_calls = 0
+        self.revision_calls = 0
         self.raise_on_structured = False
         self.compliance_json = COMPLIANCE_PASS
         self.ticket_json = TICKET_CREATE
         self.answer = "ANSWER: 购买后 7 天内可申请退款。来源: refund_policy.md"
+        self.revised_answer = "REVISED: 购买后 7 天内可申请退款（仅供参考，以合同条款为准）。"
+        # 前 N 次合规审查返回不通过，用于测试整改循环
+        self.compliance_fail_times = 0
 
     def with_structured_output(self, schema, **kwargs):
         return _Structured(self)
 
     async def ainvoke(self, messages, **kwargs):
         text = "\n".join(getattr(m, "content", "") or "" for m in messages)
+        if "合规整改助手" in text:
+            self.revision_calls += 1
+            return AIMessage(content=self.revised_answer)
         if "相关性排序专家" in text:
             return AIMessage(content="0")
         if "改写为更适合关键词检索" in text:
             return AIMessage(content="refund policy window")
         if "金融合规审查Agent" in text:
+            if self.compliance_fail_times > 0:
+                self.compliance_fail_times -= 1
+                return AIMessage(content=COMPLIANCE_FAIL)
             return AIMessage(content=self.compliance_json)
         if "工单处理Agent" in text:
             return AIMessage(content=self.ticket_json)

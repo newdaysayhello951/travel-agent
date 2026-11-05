@@ -127,6 +127,7 @@ async def lifespan(app: FastAPI):
             checkpointer=saver,
             max_context_messages=settings.max_context_messages,
             structured_method=settings.llm_structured_method,
+            max_compliance_retries=settings.max_compliance_retries,
         )
         try:
             yield

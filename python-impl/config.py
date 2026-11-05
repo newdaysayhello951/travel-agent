@@ -84,6 +84,8 @@ class Settings(BaseModel):
     short_term_max_sessions: int = Field(default=1000, gt=0)
     # 送进模型的历史消息条数上限；超出部分会从检查点里移除
     max_context_messages: int = Field(default=20, gt=0)
+    # 合规不通过时最多让模型整改几次；0 表示不整改，直接拒答
+    max_compliance_retries: int = Field(default=1, ge=0)
 
     # ── 持久化 ──
     # 业务数据（工单等）
@@ -185,6 +187,7 @@ def get_settings() -> Settings:
         short_term_ttl_seconds=_env_int("SHORT_TERM_TTL_SECONDS", 1800),
         short_term_max_sessions=_env_int("SHORT_TERM_MAX_SESSIONS", 1000),
         max_context_messages=_env_int("MAX_CONTEXT_MESSAGES", 20),
+        max_compliance_retries=_env_int("MAX_COMPLIANCE_RETRIES", 1),
         mcp_call_log_max=_env_int("MCP_CALL_LOG_MAX", 200),
         database_path=Path(_env("DATABASE_PATH", str(ROOT / ".data" / "app.db"))),
         checkpoint_db_path=Path(

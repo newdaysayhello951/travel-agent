@@ -8,14 +8,15 @@ def _nodes(graph) -> list[str]:
 
 
 def test_graph_structure(graph):
-    """节点与条件边必须与文档一致：5 个节点、2 个合法路由去向"""
+    """节点与条件边必须与文档一致：6 个节点，路由 2 个去向，合规后 2 个去向"""
     assert _nodes(graph) == [
-        "compliance_check", "knowledge_rag", "supervisor_route", "synthesize", "ticket_handler",
+        "compliance_check", "knowledge_rag", "revise", "supervisor_route",
+        "synthesize", "ticket_handler",
     ]
     targets = sorted(
         e.target for e in graph.get_graph().edges if getattr(e, "conditional", False)
     )
-    assert targets == ["knowledge_rag", "ticket_handler"]
+    assert targets == ["knowledge_rag", "revise", "synthesize", "ticket_handler"]
 
 
 async def test_routes_to_knowledge(graph, fake_llm):
