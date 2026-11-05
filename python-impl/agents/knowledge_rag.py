@@ -1,7 +1,10 @@
 """
-知识检索Agent — RAG知识库问答
-负责从向量数据库中检索相关文档，结合上下文生成准确回答。
-实现完整的RAG流程：Query改写 → 向量检索 → 重排序 → 上下文注入 → 生成回答。
+知识检索 Agent — RAG 知识库问答
+
+实现完整 RAG 流程：Query 改写 → 检索 → 重排序 → 上下文注入 → 生成回答。
+
+检索器是 memory.long_term 的本地词法匹配（中文按相邻两字切分、按词元重合度打分），
+不依赖 Embedding 模型和向量库。
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ RAG_SYSTEM_PROMPT = """你是一个专业的知识库问答Agent，负责根据�
 - 金融场景需添加风险提示
 """
 
-QUERY_REWRITE_PROMPT = """请将用户的口语化问题改写为更适合向量检索的查询语句。
+QUERY_REWRITE_PROMPT = """请将用户的口语化问题改写为更适合关键词检索的查询语句。
 保留核心语义，去除口语化表达，补充专业术语。
 只返回改写后的查询，不要其他内容。
 
@@ -56,7 +59,7 @@ class KnowledgeRAGAgent:
 
     @trace_agent_call("rag_retrieve")
     async def retrieve_documents(self, query: str, top_k: int = 5) -> list[dict]:
-        """从向量数据库检索相关文档"""
+        """从长期记忆检索相关文档（本地词法匹配，无模型调用）"""
         docs = self.long_term_memory.search(query, top_k=top_k)
         return docs
 
@@ -117,15 +120,15 @@ class KnowledgeRAGAgent:
     @trace_agent_call("knowledge_rag_process")
     async def process(self, state: dict[str, Any]) -> dict[str, Any]:
         """
-        完整RAG流程（作为Graph节点）：
-        1. Query改写
-        2. 向量检索
-        3. 重排序
-        4. 生成回答
+        完整 RAG 流程（作为 Graph 节点）：
+        1. Query 改写（模型调用）
+        2. 检索（本地词法匹配，纯计算）
+        3. 重排序（模型调用）
+        4. 生成回答（模型调用）
         """
         messages = state.get("messages", [])
         if not messages:
-            return state
+            return {}
 
         original_query = messages[-1].content
 
@@ -137,8 +140,8 @@ class KnowledgeRAGAgent:
 
         answer = await self.generate_answer(original_query, reranked_docs)
 
+        # sub_results 没有 reducer（默认覆盖语义），需要自己把已有结果合并进来。
         return {
-            **state,
             "sub_results": {
                 **state.get("sub_results", {}),
                 "knowledge_rag": answer,

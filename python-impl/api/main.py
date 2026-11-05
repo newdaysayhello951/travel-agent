@@ -52,7 +52,6 @@ async def lifespan(app: FastAPI):
     graph = create_supervisor_graph(
         llm=create_llm(),
         working_memory=working_memory,
-        short_term_memory=short_term_memory,
         long_term_memory=long_term_memory,
     )
 

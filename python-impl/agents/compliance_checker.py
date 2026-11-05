@@ -187,30 +187,29 @@ class ComplianceCheckerAgent:
         """作为Graph节点处理状态"""
         sub_results = state.get("sub_results", {})
 
-        content_to_check = ""
-        for agent_name, result in sub_results.items():
-            if isinstance(result, str):
-                content_to_check += result + "\n"
+        content_to_check = "".join(
+            result for result in sub_results.values() if isinstance(result, str)
+        )
 
         if not content_to_check.strip():
-            return {**state, "compliance_passed": True}
+            return {"compliance_passed": True}
 
         compliance_result = await self.full_check(content_to_check)
 
+        # 复制一份再改，避免原地修改图状态里已有的字典。
+        reviewed: dict[str, Any] = dict(sub_results)
         if not compliance_result.passed:
-            for key in sub_results:
-                if isinstance(sub_results[key], str):
-                    sub_results[key] = compliance_result.sanitized_content
+            for key, value in reviewed.items():
+                if isinstance(value, str):
+                    reviewed[key] = compliance_result.sanitized_content
+
+        reviewed["compliance"] = {
+            "passed": compliance_result.passed,
+            "risk_level": compliance_result.risk_level,
+            "violations": compliance_result.violations,
+        }
 
         return {
-            **state,
             "compliance_passed": compliance_result.passed,
-            "sub_results": {
-                **sub_results,
-                "compliance": {
-                    "passed": compliance_result.passed,
-                    "risk_level": compliance_result.risk_level,
-                    "violations": compliance_result.violations,
-                },
-            },
+            "sub_results": reviewed,
         }
