@@ -1,0 +1,40 @@
+# 本机/单机部署编排。
+#
+# 启动前请确认 .env 里已配置 API_KEYS：容器内监听 0.0.0.0，
+# 未配置密钥时服务会按安全默认值拒绝启动（避免接口对外裸奔）。
+services:
+  app:
+    build: .
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      # 容器内通过服务名访问 Redis
+      REDIS_URL: redis://redis:6379/0
+      # 业务数据与检查点落在挂载卷里，重建容器不丢
+      DATABASE_PATH: /app/.data/app.db
+      CHECKPOINT_DB_PATH: /app/.data/checkpoints.sqlite
+      KNOWLEDGE_INDEX_PATH: /app/.data/knowledge/index
+    volumes:
+      - app-data:/app/.data
+      - ./knowledge:/app/knowledge:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    # 短期记忆的可选依赖；未配置时应用会自动降级到进程内存
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  app-data:
