@@ -42,9 +42,10 @@ short_term_memory = ShortTermMemory(
     redis_url=settings.redis_url,
     max_turns=settings.short_term_max_turns,
     ttl_seconds=settings.short_term_ttl_seconds,
+    max_sessions=settings.short_term_max_sessions,
 )
 long_term_memory = LongTermMemory(index_path=str(settings.knowledge_index_path))
-mcp_server = create_default_tools(MCPToolServer())
+mcp_server = create_default_tools(MCPToolServer(max_call_log=settings.mcp_call_log_max))
 metrics = AgentMetrics()
 
 # 图在生命周期钩子里才编译；未就绪时接口返回 503
@@ -89,6 +90,8 @@ async def lifespan(app: FastAPI):
         llm=create_llm(),
         working_memory=working_memory,
         long_term_memory=long_term_memory,
+        max_context_messages=settings.max_context_messages,
+        structured_method=settings.llm_structured_method,
     )
 
     for source, content in SAMPLE_KNOWLEDGE:
@@ -134,8 +137,6 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     session_id = request.session_id or str(uuid.uuid4())
 
-    await short_term_memory.add_message(session_id, "user", request.message)
-
     initial_state = {
         "messages": [HumanMessage(content=request.message)],
         "user_id": request.user_id,
@@ -166,6 +167,10 @@ async def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=502, detail="模型服务暂时不可用，请稍后再试") from None
 
     final_response = result.get("final_response", "系统处理异常，请稍后重试")
+
+    # 图执行成功后才记录这轮对话。先写用户消息会让失败请求留下"有提问、无回复"的半条历史；
+    # 而模型实际看到的多轮上下文来自图检查点，两边会对不上。
+    await short_term_memory.add_message(session_id, "user", request.message)
     await short_term_memory.add_message(session_id, "assistant", final_response)
 
     return ChatResponse(

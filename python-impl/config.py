@@ -62,12 +62,22 @@ class Settings(BaseModel):
     llm_enable_thinking: bool = False
     llm_timeout_seconds: int = Field(default=45, gt=0)
     llm_max_retries: int = Field(default=0, ge=0)
+    # 结构化输出的实现方式。function_calling 依赖网关支持工具调用；
+    # json_schema / json_mode 走 response_format，部分网关（含本机实测的网关）会拒绝。
+    llm_structured_method: str = "function_calling"
 
     # ── 会话与记忆 ──
     redis_url: str = "redis://localhost:6379/0"
     short_term_max_turns: int = Field(default=20, gt=0)
     short_term_ttl_seconds: int = Field(default=1800, gt=0)
+    # 内存降级路径最多缓存多少个会话（LRU 淘汰），防止会话数无限增长
+    short_term_max_sessions: int = Field(default=1000, gt=0)
     knowledge_index_path: Path = ROOT / ".data" / "knowledge" / "index"
+    # 送进模型的历史消息条数上限；超出部分会从检查点里移除
+    max_context_messages: int = Field(default=20, gt=0)
+
+    # ── 工具 ──
+    mcp_call_log_max: int = Field(default=200, gt=0)
 
     # ── 服务 ──
     host: str = "127.0.0.1"
@@ -114,9 +124,14 @@ def get_settings() -> Settings:
         llm_model=model,
         llm_enable_thinking=_env_bool("LLM_ENABLE_THINKING", False),
         llm_timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 45),
+        llm_structured_method=_env("LLM_STRUCTURED_METHOD", "function_calling")
+        or "function_calling",
         redis_url=_env("REDIS_URL", "redis://localhost:6379/0") or "redis://localhost:6379/0",
         short_term_max_turns=_env_int("SHORT_TERM_MAX_TURNS", 20),
         short_term_ttl_seconds=_env_int("SHORT_TERM_TTL_SECONDS", 1800),
+        short_term_max_sessions=_env_int("SHORT_TERM_MAX_SESSIONS", 1000),
+        max_context_messages=_env_int("MAX_CONTEXT_MESSAGES", 20),
+        mcp_call_log_max=_env_int("MCP_CALL_LOG_MAX", 200),
         knowledge_index_path=Path(
             _env("KNOWLEDGE_INDEX_PATH", str(ROOT / ".data" / "knowledge" / "index"))
         ),

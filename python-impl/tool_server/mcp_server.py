@@ -16,6 +16,7 @@ MCP 工具协议服务端 — Model Context Protocol 的「工具子集」
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 from datetime import datetime
@@ -57,9 +58,10 @@ class MCPToolServer:
     但没有传输层，`handle_jsonrpc()` 目前也没有挂到任何 HTTP 路由上。
     """
 
-    def __init__(self):
+    def __init__(self, max_call_log: int = 200):
         self._tools: dict[str, ToolDefinition] = {}
-        self._call_log: list[ToolCallResult] = []
+        # 用固定长度队列，调用量再大也不会无限占用内存
+        self._call_log: deque[ToolCallResult] = deque(maxlen=max_call_log)
 
     def register_tool(self, tool: ToolDefinition) -> None:
         """注册一个MCP工具"""
@@ -184,7 +186,7 @@ class MCPToolServer:
             }
 
     def get_call_log(self, last_n: int = 100) -> list[dict]:
-        """获取最近的工具调用日志"""
+        """获取最近的工具调用日志（底层是固定长度队列，最多保留 max_call_log 条）"""
         return [
             {
                 "tool": r.tool_name,
@@ -193,7 +195,7 @@ class MCPToolServer:
                 "timestamp": r.timestamp,
                 "error": r.error,
             }
-            for r in self._call_log[-last_n:]
+            for r in list(self._call_log)[-last_n:]
         ]
 
 
