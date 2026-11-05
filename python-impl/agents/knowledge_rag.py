@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -16,6 +17,8 @@ from langchain_openai import ChatOpenAI
 
 from memory.long_term import LongTermMemory
 from tracing.otel_config import trace_agent_call
+
+logger = logging.getLogger(__name__)
 
 
 RAG_SYSTEM_PROMPT = """你是一个专业的知识库问答Agent，负责根据检索到的文档回答用户问题。
@@ -91,6 +94,15 @@ class KnowledgeRAGAgent:
             indices = [int(i.strip()) for i in response.content.split(",")]
             reranked = [documents[i] for i in indices if 0 <= i < len(documents)]
         except (ValueError, IndexError):
+            reranked = documents[:top_k]
+
+        if not reranked:
+            # 模型给的索引如果**全部越界**，过滤结果是空列表且不会抛异常，
+            # 兜底分支就不会触发——那会把"重排失败"静默变成"没有检索到资料"。
+            # 这里必须显式兜底并留下日志。
+            logger.warning(
+                "重排返回的索引全部无效，回退到检索顺序: %r", response.content[:80]
+            )
             reranked = documents[:top_k]
 
         return list({doc["id"]: doc for doc in reranked}.values())[:top_k]
